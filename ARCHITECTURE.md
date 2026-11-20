@@ -70,7 +70,7 @@ Avahi exception: `avahi-publish-service` publishes where avahi-daemon is configu
 `localnet.request(host)` (UDP `connect` to a known camera, port `PROBE_PORT`, no traffic) → macOS shows its Local Network permission prompt at launch. `services.open_at_login() -> problem: str | None` (`SMAppService.mainAppService`, bundle only). Bundle id `consts.BUNDLE_ID` = `com.thomergil.cannonball`; Info.plist has `NSLocalNetworkUsageDescription`, `NSBonjourServices`, `LSUIElement`; `en.lproj/InfoPlist.strings` required.
 
 ### user → cannonball · v2 · cli
-`python -m cannonball [-c PATH] [--once] [-v]`; unknown args ignored (Finder adds its own). `--once`: exit after first completed session. Linux unit: `packaging/linux/cannonball.service` (`Restart=always`).
+`python -m cannonball [-c PATH] [--once] [-v]`; unknown args ignored (Finder adds its own). `--once`: exit after first completed session. Linux unit: `packaging/linux/cannonball.service` (`Restart=always`; `@CHECKOUT@` replaced by the checkout path at install).
 Files: `state_dir/{guid,hosts.json,local-network-alert-shown,partial}` (`hosts.json`: at most `REMEMBERED_HOSTS` found addresses, filtered by `networks` on load); log `~/Library/Logs/cannonball.log` (mac) or `state_dir/cannonball.log`; images `Download.folder(capture)/<file_name>`, temp `consts.PARTIAL_NAME` = `.<name>.cannonball`, opened exclusive (`xb`), path recorded in `state_dir/partial` while written: removed on failure, and by the next session's `remove_partial` after a kill; an existing same-name temp is replaced only if untouched for `stall_timeout`, else the session fails (another writer), mtime = capture time, same name + different size → `<stem>_N<ext>`; no download unless `size + reserve_mb` is free.
 
 ### build → release · v2 · shell

@@ -17,12 +17,12 @@ in the menu bar and opens at login.
 **Linux** (Python 3.11+; uses avahi-daemon if it is running, otherwise python-zeroconf):
 
 ```sh
-git clone https://github.com/thomergil/cannonball ~/cannonball
-cd ~/cannonball
+git clone https://github.com/thomergil/cannonball
+cd cannonball
 python3 -m venv env
 env/bin/pip install --require-hashes --only-binary :all: -r requirements.txt
 mkdir -p ~/.config/systemd/user
-cp packaging/linux/cannonball.service ~/.config/systemd/user/
+sed "s|@CHECKOUT@|$PWD|g" packaging/linux/cannonball.service > ~/.config/systemd/user/cannonball.service
 systemctl --user enable --now cannonball
 ```
 

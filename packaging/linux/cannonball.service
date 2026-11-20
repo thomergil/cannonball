@@ -1,5 +1,5 @@
-# systemd user service. Assumes the checkout is ~/cannonball.
-#   cp packaging/linux/cannonball.service ~/.config/systemd/user/
+# systemd user service. @CHECKOUT@ is the checkout's path; from the checkout:
+#   sed "s|@CHECKOUT@|$PWD|g" packaging/linux/cannonball.service > ~/.config/systemd/user/cannonball.service
 #   systemctl --user enable --now cannonball
 [Unit]
 Description=Cannonball: receive photos from Canon EOS cameras over Wi-Fi
@@ -7,8 +7,8 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-WorkingDirectory=%h/cannonball
-ExecStart=%h/cannonball/env/bin/python -m cannonball
+WorkingDirectory=@CHECKOUT@
+ExecStart="@CHECKOUT@/env/bin/python" -m cannonball
 Restart=always
 RestartSec=5
 
