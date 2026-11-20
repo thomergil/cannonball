@@ -55,8 +55,11 @@ Restart Cannonball after a change (Linux: `systemctl --user restart cannonball`)
 
 - A photo is confirmed to the camera only once it is on disk; an interrupted one
   is sent again, from the start.
-- If the camera shows Wi-Fi OFF, switch it off and on. It can take two or three
-  tries.
+- The camera's Wi-Fi is fickle: a transfer can take two or three tries. If it
+  fails, switch the camera off, wait a few seconds, switch it on, and wait 30
+  seconds; the first photo can take that long to start.
+- While photos are coming in, the menu bar camera shimmers and the red camera
+  icon on the camera flickers.
 - The camera decides which photos to send (Image sending options).
 - Any device on `networks` can pose as the camera. Cannonball writes only plain
   files inside the download folder, and on macOS opens no listening sockets.
