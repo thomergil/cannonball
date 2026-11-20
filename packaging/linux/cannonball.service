@@ -1,0 +1,16 @@
+# systemd user service. Assumes the checkout is ~/cannonball.
+#   cp packaging/linux/cannonball.service ~/.config/systemd/user/
+#   systemctl --user enable --now cannonball
+[Unit]
+Description=Cannonball: receive photos from Canon EOS cameras over Wi-Fi
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/cannonball
+ExecStart=%h/cannonball/env/bin/python -m cannonball
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

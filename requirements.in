@@ -1,0 +1,4 @@
+ifaddr
+zeroconf
+pyobjc-framework-Cocoa; sys_platform == "darwin"
+pyobjc-framework-ServiceManagement; sys_platform == "darwin"

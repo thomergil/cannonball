@@ -1,0 +1,4 @@
+-c requirements.txt
+pytest
+pyinstaller; sys_platform == "darwin"
+tomli-w
