@@ -1,20 +1,20 @@
+<img src="packaging/macos/icon.png" width="96" alt="">
+
 # Cannonball
 
-Wi-Fi image transfer utility for Canon EOS cameras. It receives the photos a
-camera sends with **Auto send images to computer** and saves them to a folder.
-It replaces Canon Image Transfer Utility 2 for this one job. macOS and Linux.
-
-Tested with an EOS 90D. Other EOS models with auto-send may work; reports welcome.
+Saves the photos a Canon EOS camera sends with **Auto send images to computer**.
+A replacement for Canon Image Transfer Utility 2, for macOS and Linux. Tested
+with an EOS 90D.
 
 ## Install
 
-**macOS 13 or later, Apple Silicon:** download the `.dmg` from
-[Releases](https://github.com/thomergil/cannonball/releases), drag Cannonball to
-Applications and open it. A camera icon appears in the menu bar and Cannonball
-starts at login (turn that off in System Settings > General > Login Items).
-Allow local network access when macOS asks.
+**macOS 13+, Apple Silicon:** download
+[Cannonball.dmg](https://github.com/thomergil/cannonball/releases/latest/download/Cannonball.dmg)
+([SHA-256](https://github.com/thomergil/cannonball/releases/latest/download/Cannonball.dmg.sha256)), drag
+Cannonball to Applications, open it, and allow local network access. It lives
+in the menu bar and opens at login.
 
-**Linux:**
+**Linux** (Python 3.11+; uses avahi-daemon if it is running, otherwise python-zeroconf):
 
 ```sh
 git clone https://github.com/thomergil/cannonball ~/cannonball
@@ -26,77 +26,67 @@ cp packaging/linux/cannonball.service ~/.config/systemd/user/
 systemctl --user enable --now cannonball
 ```
 
-Needs Python 3.11+. Uses Avahi when it is running.
-
 ## Pair the camera
 
 With Cannonball running, on the camera: **Wireless settings > Wi-Fi function >
-Auto send images to computer > Auto send: Enable**, choose your Wi-Fi network and
-then this computer. After pairing, switch the camera off and on. From then on it
-sends new images whenever it is switched on near your network.
-
-If the camera was paired with Canon's utility on this Mac, Cannonball uses that
-pairing.
+Auto send images to computer > Auto send: Enable**, then pick your network and
+this computer. Switch the camera off and on; from then on it sends new photos
+each time it is switched on. A pairing made with Canon's utility on this Mac
+works as is.
 
 ## Configure
 
-Optional. `~/.config/cannonball/config.toml`:
+Optional, in `~/.config/cannonball/config.toml`:
 
 ```toml
-hosts = ["192.168.1.50"]       # camera IP; optional, but a fixed address here makes detection faster
-networks = ["192.168.1.0/24"]  # where Cannonball works; default: the private ranges
+hosts = ["192.168.1.50"]       # the camera's address, if fixed; Cannonball then finds it faster
+networks = ["192.168.1.0/24"]  # where Cannonball works; default: private and link-local ranges
 
 [download]
 destination = "~/Pictures"
 subfolder = "{date:%Y_%m_%d}"  # by capture date; "" for none
 ```
 
-All settings and defaults: [`cannonball/defaults.toml`](cannonball/defaults.toml). Restart Cannonball
-after editing (macOS: menu > Quit Cannonball, then open it again; Linux:
-`systemctl --user restart cannonball`).
-
-Logs: `~/Library/Logs/cannonball.log` (macOS), `~/.local/state/cannonball/cannonball.log` (Linux).
+Every setting is in [`cannonball/defaults.toml`](cannonball/defaults.toml).
+Restart Cannonball after a change (Linux: `systemctl --user restart cannonball`). Logs: `~/Library/Logs/cannonball.log` (macOS),
+`~/.local/state/cannonball/cannonball.log` (Linux).
 
 ## Notes
 
-- Cannonball only works on the networks in `networks` and opens no listening
-  sockets on macOS.
-- An image is confirmed to the camera only after it is saved. If a transfer
-  is interrupted, the camera sends the image again, from the start, next time.
-- If the camera's Wi-Fi indicator says OFF, switch the camera off and on.
-- Which images are sent is set on the camera (Image sending options).
+- A photo is confirmed to the camera only once it is on disk; an interrupted one
+  is sent again, from the start.
+- If the camera shows Wi-Fi OFF, switch it off and on. It can take two or three
+  tries.
+- The camera decides which photos to send (Image sending options).
+- Any device on `networks` can pose as the camera. Cannonball writes only plain
+  files inside the download folder, and on macOS opens no listening sockets.
 
 ## Development
 
 ```sh
 python3 -m venv env
 env/bin/pip install --require-hashes --only-binary :all: -r requirements.txt -r requirements-dev.txt
-env/bin/python -m cannonball -v     # run in the foreground
-env/bin/python -m pytest            # tests, against a simulated camera
-scripts/build-macos.sh              # dist/Cannonball-<version>.dmg
+env/bin/python -m cannonball -v   # run in the foreground
+env/bin/python -m pytest          # tests, against a simulated camera
+scripts/build-macos.sh            # dist/Cannonball-<version>.dmg
 ```
 
 ## Sources
 
-- Protocol: Canon's auto-send session was documented from packet captures by
-  [epsimatic/canon-wifi-downloader](https://github.com/epsimatic/canon-wifi-downloader)
-  ([PROTOCOL.md](https://github.com/epsimatic/canon-wifi-downloader/blob/85b60cd468af20db3940dec9d1ba7d2a7a229afe/PROTOCOL.md)).
-  Cannonball's PTP/IP client is its own. The tests check that it sends exactly
-  the same bytes as that project's client, which is downloaded at a pinned
-  commit and verified by SHA-256; none of its code is included.
-- PTP/IP framing: CIPA DC-X005. Canon opcode names and the session ID 0x41:
+- Protocol: Canon's auto-send session as documented from packet captures by
+  [epsimatic/canon-wifi-downloader](https://github.com/epsimatic/canon-wifi-downloader/blob/85b60cd468af20db3940dec9d1ba7d2a7a229afe/PROTOCOL.md).
+  The tests check that Cannonball's own client sends exactly the same bytes as
+  that project's, which they download at a pinned commit and verify by SHA-256.
+- PTP/IP: CIPA DC-X005; Canon opcodes and session ID from
   [libgphoto2](https://github.com/gphoto/libgphoto2) and its
   [issue #333](https://github.com/gphoto/libgphoto2/issues/333).
 - Libraries: [python-zeroconf](https://github.com/python-zeroconf/python-zeroconf) (LGPL-2.1),
-  [ifaddr](https://github.com/ifaddr/ifaddr) (MIT),
-  [PyObjC](https://github.com/ronaldoussoren/pyobjc) (MIT, macOS).
-  The macOS app is built with [PyInstaller](https://github.com/pyinstaller/pyinstaller)
-  on [python-build-standalone](https://github.com/astral-sh/python-build-standalone).
-
-Supply chain: every dependency is pinned by SHA-256 in `requirements*.txt`
-(matching PyPI's published hashes) and installed as a wheel only; nothing is
-built from source. The bundled Python is checksum-verified by
-[uv](https://github.com/astral-sh/uv). CI actions are pinned by commit.
+  [ifaddr](https://github.com/ifaddr/ifaddr) (MIT), [PyObjC](https://github.com/ronaldoussoren/pyobjc) (MIT).
+  The app is built with [PyInstaller](https://github.com/pyinstaller/pyinstaller) on
+  [python-build-standalone](https://github.com/astral-sh/python-build-standalone).
+- Supply chain: dependencies are wheels pinned by SHA-256 (matching PyPI), the
+  bundled Python is checksum-verified by [uv](https://github.com/astral-sh/uv),
+  and CI actions are pinned by commit.
 
 ## License
 

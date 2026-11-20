@@ -81,6 +81,7 @@ class FakeCamera:
         probe: bool = False,  # Probe_Request on both channels
         drop_after: int | None = None,  # drop the connection after this many image bytes (once)
         hang_on: tuple[int, int] | None = None,  # (opcode, n): stop answering at its n-th request (once)
+        chatter: float | None = None,  # while hanging, send an Event packet this often (seconds)
         fail_on: dict[int, int] | None = None,  # opcode -> response code
         raw_on: dict[int, bytes] | None = None,  # opcode -> bytes sent instead of a response
         short_reads: bool = False,  # answer reads with half the bytes asked for
@@ -98,6 +99,7 @@ class FakeCamera:
         self.probe = probe
         self.drop_after = drop_after
         self.hang_on = hang_on
+        self.chatter = chatter
         self.fail_on = fail_on or {}
         self.raw_on = raw_on or {}
         self.short_reads = short_reads
@@ -174,12 +176,24 @@ class FakeCamera:
             pos += n
 
     def _hang(self, conn, stream) -> None:
-        """Say nothing more; keep recording until the client gives up."""
+        """Never answer (only chatter, if asked); keep recording until the client gives up."""
+        quiet = threading.Event()
+        if self.chatter:
+            def chat():
+                while not quiet.wait(self.chatter):
+                    try:
+                        self._send(conn, pkt(EVENT, struct.pack("<HI", 0xC189, 0)))
+                    except OSError:
+                        return
+
+            threading.Thread(target=chat, daemon=True).start()
         try:
             while self._recv(conn, 1, stream):
                 pass
         except (EOFError, OSError):
             pass
+        finally:
+            quiet.set()
 
     def _serve(self, conn) -> None:
         stream = bytearray()  # until we know which channel this is

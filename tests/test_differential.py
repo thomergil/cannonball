@@ -54,7 +54,7 @@ def ref_client(ref):
     """The reference behind cannonball's Client interface, used as cannonball used it."""
 
     class Reference:
-        def __init__(self, host, guid, name, *, port=None, connect_timeout=3.0, op_timeout=10.0):
+        def __init__(self, host, guid, name, *, port, connect_timeout, op_timeout):
             self.c = ref.PTPIPClient(host, guid.hex, name, log=lambda *a: None, timeout=connect_timeout)
             self.op_timeout = op_timeout
 
@@ -103,12 +103,12 @@ def session(tmp_path, client_class, cam_args, sessions=1, dedupe=False):
         try:
             for _ in range(sessions):
                 try:
-                    results.append(Session(cfg, "127.0.0.1", lambda: None, lambda **e: None).run())
+                    results.append(Session(cfg, "127.0.0.1", lambda: None, lambda progress: None).run())
                 except Exception as e:  # noqa: BLE001 - compared below
                     results.append(type(e).__name__)
         finally:
             Session.client_class = old
-    files = {str(p.relative_to(cfg.download.destination)): p.read_bytes() for p in cfg.download.destination.rglob("*") if p.is_file() and p.suffix != ".part"}
+    files = {str(p.relative_to(cfg.download.destination)): p.read_bytes() for p in cfg.download.destination.rglob("*") if p.is_file()}
     return {
         "cmd": bytes(cam.cmd_stream),
         "event": bytes(cam.event_stream),
@@ -212,7 +212,7 @@ def test_same_parsing(ref):
     P = ref.PTPIPClient
     for _ in range(20000):
         data = random_event_data(rng)
-        assert canon.events(data) == P.parse_events(data)
+        assert list(canon.events(data)) == P.parse_events(data)
         ours = [(o.handle, o.size, o.path, o.format) for o in canon.objects(data)]
         theirs = [(o.handle, o.size, o.path, o.format) for o in P.parse_objects(P.parse_events(data))]
         assert ours == theirs, data.hex()

@@ -1,9 +1,9 @@
 """Draw the app icon: python icon.py OUT.icns [PREVIEW.png] (needs PyObjC; run by build-macos.sh).
 
-A camera outline with a Wi-Fi badge, on the macOS rounded-square grid.
+A camera outline with a Wi-Fi fan, on the macOS rounded-square grid. The
+README shows icon.png, made from PREVIEW.png with: sips -z 256 256 PREVIEW.png --out icon.png
 """
 
-import math
 import subprocess
 import sys
 import tempfile
@@ -16,12 +16,13 @@ from AppKit import (
     NSColor,
     NSGradient,
     NSGraphicsContext,
-    NSLineCapStyleRound,
-    NSLineJoinStyleRound,
     NSPNGFileType,
     NSShadow,
 )
 from Foundation import NSMakePoint, NSMakeRect, NSMakeSize
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from cannonball import drawing  # noqa: E402
 
 CANVAS = 1024
 BODY = NSMakeRect(100, 100, 824, 824)  # macOS icon grid: 824 pt rounded square
@@ -34,16 +35,17 @@ CAMERA = NSMakeRect(212, 290, 560, 360)
 CAMERA_CORNER = 70
 PRISM = [(392, 650), (432, 740), (552, 740), (592, 650)]  # viewfinder hump, left to right
 SHUTTER = NSMakeRect(262, 650, 90, 30)
+SHUTTER_CORNER = 12
 LENS_CENTER = (492, 465)
 LENS_RADII = (130, 72)
 
-BADGE_CENTER = (760, 680)
+BADGE_CENTER = (760, 680)  # center of the background-filled disc behind the fan
 BADGE_RADIUS = 145
-WIFI = (0.98, 0.62, 0.15)
-WIFI_DOT = 26
-WIFI_RADII = (78, 130)
-WIFI_SPAN = (45, 135)  # degrees: the fan opens upward
-WIFI_ORIGIN = (760, 605)
+FAN_COLOR = (0.98, 0.62, 0.15)
+FAN_DOT = 26
+FAN_RADII = (78, 130)
+FAN_SPAN = (45, 135)  # degrees: the fan opens upward
+FAN_CENTER = (760, 605)
 
 SIZES = [16, 32, 128, 256, 512]  # each also at @2x
 
@@ -52,17 +54,8 @@ def rgb(c, alpha=1.0):
     return NSColor.colorWithCalibratedRed_green_blue_alpha_(*c, alpha)
 
 
-def stroke(path, color, width=STROKE) -> None:
-    path.setLineWidth_(width)
-    path.setLineCapStyle_(NSLineCapStyleRound)
-    path.setLineJoinStyle_(NSLineJoinStyleRound)
-    rgb(color).set()
-    path.stroke()
-
-
-def circle(center, radius) -> NSBezierPath:
-    x, y = center
-    return NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(x - radius, y - radius, 2 * radius, 2 * radius))
+def stroke(path) -> None:
+    drawing.stroke(path, STROKE, rgb(LINE))
 
 
 def body_gradient(path) -> None:
@@ -88,27 +81,21 @@ def background(body) -> None:
 
 def camera() -> None:
     outline = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(CAMERA, CAMERA_CORNER, CAMERA_CORNER)
-    stroke(outline, LINE)
+    stroke(outline)
     prism = NSBezierPath.bezierPath()
     prism.moveToPoint_(NSMakePoint(*PRISM[0]))
     for point in PRISM[1:]:
         prism.lineToPoint_(NSMakePoint(*point))
-    stroke(prism, LINE)
-    stroke(NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(SHUTTER, 12, 12), LINE)
+    stroke(prism)
+    stroke(NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(SHUTTER, SHUTTER_CORNER, SHUTTER_CORNER))
     for radius in LENS_RADII:
-        stroke(circle(LENS_CENTER, radius), LINE)
+        stroke(drawing.circle(LENS_CENTER, radius))
 
 
-def wifi() -> None:
-    # Knock the camera lines out behind the badge, then draw the Wi-Fi fan.
-    body_gradient(circle(BADGE_CENTER, BADGE_RADIUS))
-    rgb(WIFI).set()
-    circle(WIFI_ORIGIN, WIFI_DOT).fill()
-    start, end = WIFI_SPAN
-    for radius in WIFI_RADII:
-        arc = NSBezierPath.bezierPath()
-        arc.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_(NSMakePoint(*WIFI_ORIGIN), radius, start, end)
-        stroke(arc, WIFI)
+def fan() -> None:
+    # Fill a disc with the background to hide the camera lines behind the fan, then draw the fan.
+    body_gradient(drawing.circle(BADGE_CENTER, BADGE_RADIUS))
+    drawing.wifi_fan(FAN_CENTER, FAN_RADII, STROKE, FAN_DOT, FAN_SPAN, rgb(FAN_COLOR))
 
 
 def draw() -> NSBitmapImageRep:
@@ -122,7 +109,7 @@ def draw() -> NSBitmapImageRep:
     NSGraphicsContext.saveGraphicsState()
     body.addClip()
     camera()
-    wifi()
+    fan()
     NSGraphicsContext.restoreGraphicsState()
     NSGraphicsContext.restoreGraphicsState()
     return rep

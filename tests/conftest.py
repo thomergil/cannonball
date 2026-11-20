@@ -15,19 +15,21 @@ GUID = uuid.UUID("10f875fa-0000-4000-8000-00000000c0de")
 CHUNK = 64 * 1024  # small chunks keep the tests fast but exercise the loop
 
 
-def make_config(tmp_path: Path, port: int, **overrides) -> config.Config:
+def make_config(tmp_path: Path, port: int | None = None, **overrides) -> config.Config:
+    """port: the fake camera's; None keeps the default, for tests without a camera."""
     raw = {
         "guid": str(GUID),
         "name": "testhost",
         "advertise": False,
         "hosts": [],
         "networks": ["127.0.0.0/8"],  # the fake camera is on loopback
-        "port": port,
         "download": {"destination": str(tmp_path / "Pictures"), "chunk_size_mb": CHUNK / 1024 / 1024},
         "timing": {"connect_window": 3, "op_timeout": 2, "idle_timeout": 0, "retry_delay": 0.2, "resync_after": 0.2},
         "state_dir": str(tmp_path / "state"),
         "log_file": "",
     }
+    if port is not None:
+        raw["port"] = port
     for key, value in overrides.items():
         section, _, sub = key.partition(".")
         if sub:
@@ -50,7 +52,7 @@ def images(*sizes: int, seed: int = 1) -> list[Image]:
 
 @pytest.fixture
 def cfg_for(tmp_path):
-    def make(port, **overrides):
+    def make(port=None, **overrides):
         return make_config(tmp_path, port, **overrides)
 
     return make

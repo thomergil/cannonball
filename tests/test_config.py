@@ -50,10 +50,61 @@ def test_unknown_setting_is_an_error(tmp_path, raw):
         load(tmp_path, raw)
 
 
-@pytest.mark.parametrize("raw", [{"networks": ["not a network"]}, {"timing": {"op_timeout": "soon"}}, {"guid": "nope"}])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"networks": ["not a network"]},
+        {"networks": "192.168.0.0/16"},
+        {"hosts": "192.168.1.5"},
+        {"hosts": [5]},
+        {"timing": {"op_timeout": "soon"}},
+        {"timing": {"op_timeout": True}},
+        {"timing": 3},
+        {"download": 3},
+        {"guid": "nope"},
+        {"port": "x"},
+        {"port": 1.5},
+        {"advertise": "false"},
+        {"log_level": "loud"},
+        {"port": True},
+        {"port": 0},
+        {"port": 65536},
+        {"announce_port": 0},
+        {"announce_port": 65536},
+        {"ping_misses": 0},
+        {"timing": {"op_timeout": -1}},
+        {"timing": {"poll_interval": 0}},
+        {"timing": {"event_poll": 0}},
+        {"timing": {"retry_delay": -1}},
+        {"timing": {"ping_timeout": 0.5}},
+        {"download": {"chunk_size_mb": 0.0}},
+        {"download": {"chunk_size_mb": 1 / 128}},
+        {"download": {"chunk_size_mb": float("nan")}},
+        {"timing": {"stall_timeout": float("inf")}},
+        {"download": {"reserve_mb": 10**400}},
+        {"download": {"chunk_size_mb": 17}},
+        {"download": {"reserve_mb": -1}},
+        {"download": {"subfolder": "{dat}"}},
+        {"download": {"subfolder": "{date:%Y"}},
+        {"download": {"subfolder": "{date[0]}"}},
+        {"download": {"subfolder": "../{date:%Y}"}},
+        {"download": {"subfolder": "/Volumes/X/{date:%Y}"}},
+        {"download": {"subfolder": "{date:%Y}\0"}},
+        {"download": {"subfolder": "{date:%Y}/../.."}},
+        {"download": {"destination": "Pictures"}},
+        {"name": "x" * 64},
+        {"timing": {"connect_timeout": 60.0}},  # not less than stall_timeout
+        {"timing": {"event_poll": 60.0}},
+        *({"timing": {key: 0}} for key in ["poll_interval", "event_poll", "connect_window", "connect_timeout", "connect_retry", "op_timeout", "stall_timeout"]),
+    ],
+)
 def test_bad_value_is_an_error(tmp_path, raw):
-    with pytest.raises(config.ConfigError):
+    with pytest.raises(config.ConfigError, match=str(tmp_path)):
         load(tmp_path, raw)
+
+
+def test_whole_numbers_are_accepted_for_seconds(tmp_path):
+    assert load(tmp_path, {"timing": {"op_timeout": 3}}).timing.op_timeout == 3.0
 
 
 def test_networks(tmp_path):
@@ -109,3 +160,40 @@ def test_readme_example_loads(tmp_path):
     path.write_text(tomli_w.dumps({"state_dir": str(tmp_path)}) + example)
     cfg = config.load(path)
     assert cfg.hosts == ["192.168.1.50"] and "192.168.1.50" in cfg.networks
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"port": 1},
+        {"port": 65535},
+        {"announce_port": 1},
+        {"announce_port": 65535},
+        {"ping_misses": 1},
+        {"download": {"chunk_size_mb": 1 / 64}},
+        {"download": {"chunk_size_mb": 16}},
+        {"download": {"reserve_mb": 0}},
+        {"download": {"subfolder": ""}},
+        {"download": {"subfolder": "Camera/{date:%Y}"}},
+        {"name": "x" * 63},
+        {"timing": {"ping_timeout": 1}},
+        {"timing": {"idle_timeout": 0}},
+    ],
+)
+def test_values_at_the_limits_are_accepted(tmp_path, raw):
+    load(tmp_path, raw)
+
+
+def test_unreadable_file_is_a_config_error(tmp_path):
+    (tmp_path / "config.toml").mkdir()
+    with pytest.raises(config.ConfigError, match=str(tmp_path)):
+        config.load(tmp_path / "config.toml")
+
+
+def test_unusable_log_file_is_a_config_error(tmp_path):
+    from cannonball.__main__ import arguments, supervisor
+
+    path = tmp_path / "config.toml"
+    load(tmp_path, {"log_file": str(tmp_path)})  # a folder
+    with pytest.raises(config.ConfigError, match="log_file"):
+        supervisor(arguments(["-c", str(path)]))

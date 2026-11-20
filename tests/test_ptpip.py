@@ -15,6 +15,7 @@ from cannonball.ptpip import Client, ProtocolError
 
 def client(port, **kw):
     kw.setdefault("op_timeout", 2.0)
+    kw.setdefault("connect_timeout", 2.0)
     return Client("127.0.0.1", GUID, "testhost", port=port, **kw)
 
 
@@ -82,6 +83,30 @@ def test_timeout_when_camera_stops_answering():
         c.close()
 
 
+def test_timeout_counts_from_progress_not_from_any_packet():
+    """A camera that keeps sending events but never answers must still time out."""
+    with FakeCamera(GUID, [], hang_on=(0x9101, 1), chatter=0.1) as cam:
+        c = client(cam.port, op_timeout=0.5)
+        c.connect()
+        outcome = []
+
+        def attempt():
+            try:
+                c.op(0x9101)
+            except Exception as e:  # noqa: BLE001 - recorded for the assertion
+                outcome.append(e)
+
+        worker = threading.Thread(target=attempt, daemon=True)
+        started = time.monotonic()
+        worker.start()
+        worker.join(3)
+        still_waiting = worker.is_alive()
+        c.close()
+        assert not still_waiting, "operation still waiting after 3 s"
+        assert isinstance(outcome[0], TimeoutError)
+        assert time.monotonic() - started < 1.5
+
+
 def test_drop_mid_data():
     imgs = images(100_000)
     with FakeCamera(GUID, imgs, drop_after=5000) as cam:
@@ -98,12 +123,18 @@ def test_drop_mid_data():
     "raw, message",
     [
         (struct.pack("<II", 4, 7), "length"),  # shorter than its header
-        (struct.pack("<II", ptpip.MAX_PACKET + 1, 10), "length"),  # absurdly long
+        (struct.pack("<II", 8 + ptpip.DATA_HEADER + ptpip.MAX_DATA + 1, 10), "length"),  # absurdly long Data
+        (struct.pack("<II", 8 + ptpip.MAX_CONTROL + 1, 7), "length"),  # oversized response
+        (pkt(7, struct.pack("<HI", 0x2001, 1) + bytes(4 * 6)), "parameters"),  # more than PTP allows
+        (pkt(7, b"\x01"), "short"),  # truncated response
+        (pkt(9, b"\x01\x00"), "short"),  # truncated Start_Data
         (pkt(11, struct.pack("<I", 1)), "cancelled"),  # Cancel
         (pkt(10, struct.pack("<I", 1) + b"x"), "outside a data phase"),
         (pkt(9, struct.pack("<IQ", 1, 4)) + pkt(12, struct.pack("<I", 1) + b"toolong"), "announced"),
         (pkt(9, struct.pack("<IQ", 99, 4)), "Start_Data"),  # wrong transaction
-        (pkt(9, struct.pack("<IQ", 1, ptpip.MAX_PACKET + 1)), "Start_Data"),
+        (pkt(9, struct.pack("<IQ", 1, ptpip.MAX_DATA + 1)), "Start_Data"),
+        (pkt(9, struct.pack("<IQ", 1, 4)) + pkt(9, struct.pack("<IQ", 1, 4)), "second Start_Data"),  # resets the deadline
+        (pkt(9, struct.pack("<IQ", 1, 4)) + pkt(10, struct.pack("<I", 99) + b"x"), "outside a data phase"),  # wrong transaction
         (pkt(7, struct.pack("<HI", 0x2001, 99)), "transaction"),
         (pkt(2, b""), "unexpected packet type"),
     ],
@@ -112,9 +143,11 @@ def test_malformed_replies(raw, message):
     with FakeCamera(GUID, [], raw_on={0x9101: raw}) as cam:
         c = client(cam.port, op_timeout=1.0)
         c.connect()
-        with pytest.raises(ProtocolError, match=message):
-            c.op(0x9101)
-        c.close()
+        try:
+            with pytest.raises(ProtocolError, match=message):
+                c.op(0x9101)
+        finally:
+            c.close()
 
 
 def test_probes_are_answered_on_both_channels():
@@ -175,3 +208,91 @@ def test_event_ack_must_follow():
         c.connect()
     c.close()
     server.close()
+
+
+class SlowData(FakeCamera):
+    """Answers 0x9101 with a data phase that trickles in over 1.2 s, or with empty packets for 3 s."""
+
+    def __init__(self, *args, empty=False, **kw):
+        super().__init__(*args, **kw)
+        self.empty = empty
+
+    def _operation(self, conn, session, code, tid, params):
+        if code != 0x9101:
+            return super()._operation(conn, session, code, tid, params)
+        self._send(conn, pkt(9, struct.pack("<IQ", tid, 6)))
+        if self.empty:
+            try:
+                for _ in range(15):
+                    time.sleep(0.2)
+                    self._send(conn, pkt(10, struct.pack("<I", tid)))
+            except OSError:
+                pass  # the client gave up, as it should
+            return
+        for i in range(6):
+            time.sleep(0.2)
+            self._send(conn, pkt(12 if i == 5 else 10, struct.pack("<I", tid) + b"d"))
+        self._send(conn, pkt(7, struct.pack("<HI", 0x2001, tid)))
+
+
+def test_steady_data_phase_outlasts_op_timeout():
+    with SlowData(GUID, []) as cam:
+        c = client(cam.port, op_timeout=0.5)
+        c.connect()
+        try:
+            rc, _, data = c.op(0x9101)  # 1.2 s in all, but always progressing
+        finally:
+            c.close()
+    assert (rc, data) == (0x2001, b"d" * 6)
+
+
+def test_empty_data_packets_are_not_progress():
+    with SlowData(GUID, [], empty=True) as cam:
+        c = client(cam.port, op_timeout=0.5)
+        c.connect()
+        started = time.monotonic()
+        try:
+            with pytest.raises(TimeoutError):
+                c.op(0x9101)
+        finally:
+            c.close()
+    assert time.monotonic() - started < 1.5  # the empty packets went on for 3 s
+
+
+def test_camera_name_is_made_printable():
+    with FakeCamera(GUID, [], name="EOS\n90D\u202e" + "x" * 100) as cam:
+        c = client(cam.port)
+        c.connect()
+        c.close()
+    assert c.camera_name == ("EOS90D" + "x" * 100)[: ptpip.MAX_CAMERA_NAME]
+
+
+def test_event_connection_takes_no_data_packets():
+    ours, camera = socket.socketpair()
+    with ours, camera:
+        ours.settimeout(5)
+        c = client(1)
+        c.event = ours
+        loop = threading.Thread(target=c._event_loop, daemon=True)
+        loop.start()
+        camera.sendall(struct.pack("<II", 8 + ptpip.DATA_HEADER + ptpip.MAX_CONTROL + 1, ptpip.DATA))
+        loop.join(1)
+        assert not loop.is_alive()  # refused the header; a looser limit would wait for the body
+
+
+@pytest.mark.parametrize("payload, ok", [(ptpip.MAX_DATA, True), (ptpip.MAX_DATA + 1, False)])
+def test_full_size_data_packet(payload, ok):
+    ours, camera = socket.socketpair()
+    with ours, camera:
+        ours.settimeout(5)
+        header = struct.pack("<II", 8 + ptpip.DATA_HEADER + payload, ptpip.END_DATA)
+        if not ok:
+            camera.sendall(header)
+            with pytest.raises(ProtocolError, match="length"):
+                ptpip.recv_packet(ours)
+            return
+        sender = threading.Thread(target=camera.sendall, args=(header + bytes(ptpip.DATA_HEADER + payload),), daemon=True)
+        sender.start()
+        kind, body = ptpip.recv_packet(ours)
+        sender.join()
+        assert (kind, len(body)) == (ptpip.END_DATA, ptpip.DATA_HEADER + payload)

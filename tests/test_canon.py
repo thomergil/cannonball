@@ -16,9 +16,9 @@ def test_object_record_from_protocol_md():
 
 def test_events_stop_at_garbage():
     good = c1ab(0x91900010, 2, "a")
-    assert len(canon.events(good + struct.pack("<II", 4, 0) + good)) == 1  # length < 8
-    assert len(canon.events(good + struct.pack("<II", 999, 0))) == 1  # runs past the end
-    assert canon.events(b"") == [] and canon.events(b"\0" * 7) == []
+    assert len(list(canon.events(good + struct.pack("<II", 4, 0) + good))) == 1  # length < 8
+    assert len(list(canon.events(good + struct.pack("<II", 999, 0)))) == 1  # runs past the end
+    assert list(canon.events(b"")) == [] and list(canon.events(b"\0" * 7)) == []
 
 
 def test_short_object_record_is_skipped():
@@ -48,3 +48,8 @@ def test_object_info_truncated():
     assert canon.object_info(info()[:0x38]) is None
     assert canon.object_info(info()[: 0x38 + 5]) is None  # name cut short
     assert canon.object_info(info()[:-3]) is None  # second timestamp cut short
+
+
+def test_overlong_file_name_is_replaced():
+    assert canon.file_name(0x2A, "x" * 129 + ".JPG") == "IMG_0000002A"
+    assert canon.file_name(0x2A, "x" * 124 + ".JPG") == "x" * 124 + ".JPG"

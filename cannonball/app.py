@@ -1,7 +1,8 @@
-"""Entry point of Cannonball.app on macOS: the menu bar icon and the supervisor, in one app.
+"""Entry point of Cannonball.app on macOS.
 
-One ordinary app, opened by the user or at login, so that macOS asks for, and
-applies, its Local Network permission to the camera sessions it runs.
+The menu bar and the supervisor run in one app process, opened by the user or
+at login, so macOS asks for the app's Local Network permission and applies it
+to the worker processes the app starts.
 """
 
 import multiprocessing

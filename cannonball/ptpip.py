@@ -13,11 +13,11 @@ import logging
 import socket
 import struct
 import threading
+import time
 import uuid
 
 log = logging.getLogger(__name__)
 
-PORT = 15740
 VERSION = 0x00010000
 
 INIT_COMMAND_REQUEST = 1
@@ -36,7 +36,13 @@ PROBE_REQUEST = 13
 PROBE_RESPONSE = 14
 
 DATA_PHASE_NONE_OR_IN = 1  # we never send data to the camera
-MAX_PACKET = 64 * 1024 * 1024  # bounds what an untrusted peer can make us allocate
+# Bounds on what an untrusted peer can make us allocate.
+MAX_DATA = 16 * 1024 * 1024  # one data phase, and so one Data packet; bounds download.chunk_size_mb
+MAX_CONTROL = 4096  # any other packet
+MAX_PARAMS = 5  # per operation response (PIMA 15740)
+MAX_CAMERA_NAME = 64  # characters kept of the name the camera reports
+DATA_CARRIERS = {DATA, END_DATA}
+DATA_HEADER = 4  # transaction id before a Data or End_Data payload
 
 
 class ProtocolError(Exception):
@@ -59,11 +65,26 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return bytes(buf)
 
 
-def recv_packet(sock: socket.socket) -> tuple[int, bytes]:
+def recv_packet(sock: socket.socket, max_data: int = MAX_DATA) -> tuple[int, bytes]:
+    """One packet; Data and End_Data may carry max_data bytes, others MAX_CONTROL."""
     length, kind = struct.unpack("<II", _recv_exact(sock, 8))
-    if not 8 <= length <= MAX_PACKET:
-        raise ProtocolError(f"bad packet length {length}")
+    limit = DATA_HEADER + max_data if kind in DATA_CARRIERS else MAX_CONTROL
+    if not 8 <= length <= 8 + limit:
+        raise ProtocolError(f"bad length {length} for packet type {kind}")
     return kind, _recv_exact(sock, length - 8)
+
+
+def unpack(fmt: str, body: bytes, offset: int = 0) -> tuple:
+    """struct.unpack_from, with a short packet as a ProtocolError."""
+    try:
+        return struct.unpack_from(fmt, body, offset)
+    except struct.error as e:
+        raise ProtocolError(f"short packet: {e}") from e
+
+
+def printable(text: str, limit: int) -> str:
+    """A camera-supplied string, safe to log and display."""
+    return "".join(ch for ch in text if ch.isprintable())[:limit]
 
 
 def _utf16z(text: str) -> bytes:
@@ -74,22 +95,14 @@ class Client:
     """One PTP/IP connection to a camera.
 
     op() returns (response code, response params, data) and does not raise on
-    a non-OK response code; it raises ProtocolError or OSError (including
-    socket timeouts) when the connection itself fails.
+    a non-OK response code; it raises ProtocolError when the camera breaks the
+    protocol, TimeoutError when an operation goes op_timeout seconds without
+    progress, and OSError when the connection fails.
     """
 
-    def __init__(
-        self,
-        host: str,
-        guid: uuid.UUID,
-        name: str,
-        *,
-        port: int | None = None,
-        connect_timeout: float = 3.0,
-        op_timeout: float = 10.0,
-    ):
+    def __init__(self, host: str, guid: uuid.UUID, name: str, *, port: int, connect_timeout: float, op_timeout: float):
         self.host = host
-        self.port = port or PORT
+        self.port = port
         self.guid = guid
         self.name = name
         self.connect_timeout = connect_timeout
@@ -112,30 +125,30 @@ class Client:
     def connect(self) -> None:
         self.cmd = self._open()
         self.cmd.sendall(packet(INIT_COMMAND_REQUEST, self.guid.bytes + _utf16z(self.name) + struct.pack("<I", VERSION)))
-        kind, body = recv_packet(self.cmd)
+        kind, body = recv_packet(self.cmd, max_data=MAX_CONTROL)
         if kind == INIT_FAIL:
             reason = struct.unpack_from("<I", body)[0] if len(body) >= 4 else None
             raise ProtocolError(f"camera refused the connection (Init_Fail, reason {reason})")
         if kind != INIT_COMMAND_ACK or len(body) < 24:
             raise ProtocolError(f"expected Init_Command_Ack, got packet type {kind}")
-        connection = struct.unpack_from("<I", body)[0]
+        (connection,) = unpack("<I", body)
         self.camera_guid = uuid.UUID(bytes=body[4:20])
-        self.camera_name = body[20:-4].decode("utf-16le", "replace").split("\0")[0]
+        self.camera_name = printable(body[20:-4].decode("utf-16le", "replace").split("\0")[0], MAX_CAMERA_NAME)
 
         self.event = self._open()
         self.event.sendall(packet(INIT_EVENT_REQUEST, struct.pack("<I", connection)))
-        kind, _ = recv_packet(self.event)
+        kind, _ = recv_packet(self.event, max_data=MAX_CONTROL)
         if kind != INIT_EVENT_ACK:
             raise ProtocolError(f"expected Init_Event_Ack, got packet type {kind}")
         self.event.settimeout(None)
         threading.Thread(target=self._event_loop, name="ptpip-events", daemon=True).start()
-        self.cmd.settimeout(self.op_timeout)
 
     def _event_loop(self) -> None:
         """Answer probes on the event connection; events themselves are not used."""
         try:
             while not self._closed.is_set():
-                kind, _ = recv_packet(self.event)
+                kind, body = recv_packet(self.event, max_data=MAX_CONTROL)  # never carries data
+                log.debug("<- event connection: packet type %d, %d bytes", kind, len(body))
                 if kind == PROBE_REQUEST:
                     self.event.sendall(packet(PROBE_RESPONSE))
         except (OSError, ProtocolError):
@@ -158,36 +171,55 @@ class Client:
         self._tid += 1
         tid = self._tid
         body = struct.pack("<IHI", DATA_PHASE_NONE_OR_IN, code, tid) + struct.pack(f"<{len(params)}I", *params)
-        log.debug("-> 0x%04X %s", code, [hex(p) for p in params])
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("-> 0x%04X %s", code, [hex(p) for p in params])
+        self.cmd.settimeout(self.op_timeout)
         self.cmd.sendall(packet(OPERATION_REQUEST, body))
 
         data = bytearray()
         expected = None  # data length announced by Start_Data
+        deadline = time.monotonic() + self.op_timeout  # moves only when this operation progresses
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"no progress on operation 0x{code:04X} for {self.op_timeout:g}s")
+            self.cmd.settimeout(remaining)
             kind, body = recv_packet(self.cmd)
             if kind == OPERATION_RESPONSE:
-                rc, rtid = struct.unpack_from("<HI", body)
+                rc, rtid = unpack("<HI", body)
                 if rtid != tid:
                     raise ProtocolError(f"response for transaction {rtid}, expected {tid}")
                 n = (len(body) - 6) // 4
-                params = list(struct.unpack_from(f"<{n}I", body, 6))
-                log.debug("<- 0x%04X %s, %d bytes", rc, [hex(p) for p in params], len(data))
-                return rc, params, bytes(data)
+                if n > MAX_PARAMS:
+                    raise ProtocolError(f"response with {n} parameters")
+                result = list(unpack(f"<{n}I", body, 6))
+                if log.isEnabledFor(logging.DEBUG):
+                    log.debug("<- 0x%04X %s, %d bytes", rc, [hex(p) for p in result], len(data))
+                return rc, result, bytes(data)
             if kind == START_DATA:
-                dtid, expected = struct.unpack_from("<IQ", body)
-                if dtid != tid or expected > MAX_PACKET:
+                if expected is not None:
+                    raise ProtocolError(f"second Start_Data during operation 0x{code:04X}")
+                dtid, expected = unpack("<IQ", body)
+                if dtid != tid or expected > MAX_DATA:
                     raise ProtocolError(f"bad Start_Data (transaction {dtid}, {expected} bytes)")
-            elif kind in (DATA, END_DATA):
-                if expected is None or struct.unpack_from("<I", body)[0] != tid:
+                deadline = time.monotonic() + self.op_timeout
+            elif kind in DATA_CARRIERS:
+                (dtid,) = unpack("<I", body)
+                if expected is None or dtid != tid:
                     raise ProtocolError("data outside a data phase")
-                data += body[4:]
-                if len(data) > expected:
-                    raise ProtocolError(f"camera sent {len(data)} bytes, announced {expected}")
+                payload = len(body) - DATA_HEADER
+                if len(data) + payload > expected:
+                    raise ProtocolError(f"camera sent {len(data) + payload} bytes, announced {expected}")
+                if payload:
+                    data += body[DATA_HEADER:]
+                    deadline = time.monotonic() + self.op_timeout
             elif kind == CANCEL:
                 raise ProtocolError(f"camera cancelled operation 0x{code:04X}")
             elif kind == PROBE_REQUEST:
+                log.debug("<- probe during 0x%04X", code)
                 self.cmd.sendall(packet(PROBE_RESPONSE))
             elif kind == EVENT:
-                pass  # Canon reports through GetEvent; nothing to do
+                if log.isEnabledFor(logging.DEBUG):  # Canon reports through GetEvent instead
+                    log.debug("<- event during 0x%04X: %s", code, body.hex())
             else:
                 raise ProtocolError(f"unexpected packet type {kind} during operation 0x{code:04X}")

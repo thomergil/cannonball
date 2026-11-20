@@ -5,6 +5,7 @@
 #                     "Developer ID Application" identity, else ad-hoc
 #   NOTARY_KEY_PATH   App Store Connect API key (.p8); with NOTARY_KEY_ID and
 #                     NOTARY_ISSUER_ID, the image is notarized and stapled
+#   RELEASE=1         refuse to finish without a Developer ID identity and notarization
 #   UV                uv binary (default: uv)
 #
 # Python comes from python-build-standalone via uv, which checks it against
@@ -13,14 +14,14 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-PYTHON_VERSION=3.14
+PYTHON_VERSION=3.14.10
 UV=${UV:-uv}
 B=build/macos
 
 rm -rf "$B"
 mkdir -p "$B" dist
 "$UV" python install --install-dir "$B/python" "$PYTHON_VERSION"
-PY=$(find "$B/python" -path "*/bin/python$PYTHON_VERSION" -type f | head -1)
+PY=$(find "$B/python" -path "*/bin/python${PYTHON_VERSION%.*}" -type f | head -1)
 "$PY" -m venv "$B/venv"
 VPY=$B/venv/bin/python
 "$VPY" -m pip install -q --require-hashes --only-binary :all: -r requirements.txt -r requirements-dev.txt
@@ -36,6 +37,10 @@ if [ -z "${SIGNING_IDENTITY:-}" ]; then
     | awk -F'"' '/Developer ID Application/ { print $2; exit }')
 fi
 SIGNING_IDENTITY=${SIGNING_IDENTITY:--}
+if [ "${RELEASE:-}" = 1 ] && { [ "$SIGNING_IDENTITY" = - ] || [ -z "${NOTARY_KEY_PATH:-}" ]; }; then
+  echo "RELEASE=1 needs a Developer ID Application identity and NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER_ID." >&2
+  exit 1
+fi
 
 ICON=$PWD/$B/$APP_NAME.icns
 "$VPY" packaging/macos/icon.py "$ICON"

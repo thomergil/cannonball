@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from conftest import GUID, make_config
@@ -19,7 +20,7 @@ def test_computer_txt():
 @pytest.fixture
 def found(tmp_path):
     seen = []
-    cfg = make_config(tmp_path, 0, networks=["192.168.0.0/16"])
+    cfg = make_config(tmp_path, networks=["192.168.0.0/16"])
     return discovery.ZeroconfDiscovery(cfg, lambda address, txt: seen.append(address)), seen  # not started
 
 
@@ -53,7 +54,7 @@ def test_mac_round_trip(tmp_path):
     """Publish a camera-like record through mDNSResponder and find it again."""
     from cannonball import dnssd
 
-    cfg = make_config(tmp_path, 0, networks=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"])
+    cfg = make_config(tmp_path, networks=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"])
     interfaces = sorted(cfg.networks.interfaces())
     if not interfaces:
         pytest.skip("no interface on a private network")
@@ -78,3 +79,77 @@ def test_mac_round_trip(tmp_path):
         camera.stop()
         service.close()
         finder.close()
+
+
+class Recorder(discovery.Discovery):
+    """A backend that only counts starts; healthy unless told otherwise."""
+
+    def __init__(self, cfg):
+        super().__init__(cfg, lambda address, txt: None)
+        self.calls, self.healthy = [], True
+
+    def _start(self):
+        self.calls.append("start")
+
+    def _healthy(self):
+        return self.healthy
+
+    def announce(self):
+        pass
+
+    def close(self):
+        self.calls.append("close")
+
+
+def test_restarts_when_the_interfaces_change(tmp_path, monkeypatch):
+    cfg = make_config(tmp_path)
+    now = {}
+    monkeypatch.setattr(type(cfg.networks), "interfaces", lambda self: dict(now))
+    d = Recorder(cfg)
+    d.start()  # before Wi-Fi is up
+    assert d.alive()
+    now[4] = "192.168.1.20"  # joined a network
+    assert not d.alive()
+    d.restart()
+    assert d.alive() and d.calls == ["start", "close", "start"] and d.interfaces == {4: "192.168.1.20"}
+    now[4] = "192.168.1.21"  # a new address on the same interface
+    assert not d.alive()
+    d.restart()
+    d.healthy = False
+    assert not d.alive()
+
+
+def test_zeroconf_waits_quietly_for_an_interface(tmp_path, monkeypatch, caplog):
+    cfg = make_config(tmp_path)
+    monkeypatch.setattr(type(cfg.networks), "interfaces", lambda self: {})
+    d = discovery.ZeroconfDiscovery(cfg, lambda address, txt: None)
+    d.start()
+    assert d.alive()  # nothing to restart until an interface appears
+    d.announce()
+    assert caplog.text.count("no network interface") == 1
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="mDNSResponder")
+def test_dnssd_service_closes_after_its_thread_failed():
+    from cannonball import dnssd
+
+    service = dnssd.Service()
+    wake = (service._wake_r, service._wake_w)
+    released = []
+    service.lib = SimpleNamespace(DNSServiceRefDeallocate=released.append)
+    held_r, held_w = os.pipe()  # stands in for an operation's socket
+
+    def fail():
+        raise RuntimeError("boom")
+
+    service.call(lambda: service._ops.__setitem__(held_r, dnssd._Op("ref", None)))
+    service.call(fail)
+    assert service.failed.wait(1)
+    service._thread.join(1)
+    service.close()  # must not touch closed or reused descriptors
+    for fd in wake:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    assert released == ["ref"]  # the operation the dead thread held
+    os.close(held_r)
+    os.close(held_w)

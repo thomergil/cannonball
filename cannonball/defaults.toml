@@ -5,8 +5,10 @@
 # A fixed address for the camera, listed here, makes detection faster.
 hosts = []
 
-# Cannonball announces itself, finds cameras and accepts camera addresses
-# only on these networks. The default is the private address ranges.
+# Cannonball finds cameras and accepts camera addresses only on these networks,
+# and announces itself only there (with Avahi on Linux, Avahi's own interface
+# settings decide where). The default is the private ranges (RFC 1918) and the
+# link-local range (RFC 3927). Any device on these networks can pose as the camera.
 networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"]
 
 # Name the camera shows for this computer. Empty: the hostname.
@@ -22,8 +24,9 @@ advertise = true
 # The camera's PTP/IP port.
 port = 15740
 
-# Port named in this computer's announcement. Nothing listens on it: Cannonball
-# connects to the camera, never the other way round. Must not be 0.
+# Port named in this computer's announcement; nothing listens on it, because
+# Cannonball connects to the camera. Not 0: DNSServiceRegister (dns_sd.h) treats
+# port 0 as a placeholder that browsing cameras never see.
 announce_port = 15741
 
 state_dir = "~/.local/state/cannonball"
@@ -40,18 +43,20 @@ destination = "~/Pictures"
 # Subfolder per image, a Python format string; date is the capture time.
 # "{date:%Y}/{date:%Y-%m-%d}" gives 2026/2026-11-19; "" means none.
 subfolder = "{date:%Y_%m_%d}"
-chunk_size_mb = 1
+chunk_size_mb = 1.0
+# Leave at least this much free on the disk; an image that does not fit waits on the camera.
+reserve_mb = 1024.0
 
 [timing]                 # seconds
-poll_interval = 1        # how often to look for the camera
-announce_interval = 10   # how often to re-announce this computer while idle
-connect_window = 10      # how long to keep trying once the camera is seen
-connect_timeout = 3      # one connection attempt
-connect_retry = 0.5      # pause between connection attempts
-op_timeout = 10          # longest wait for one camera operation
-event_poll = 1           # how often to ask the camera for new images
-idle_timeout = 10        # end the session once the camera has sent nothing this long
-stall_timeout = 60       # restart a session that makes no progress this long
-retry_delay = 1          # wait after a failed session
-resync_after = 5         # wait after a completed session
-ping_timeout = 1         # one reachability check
+poll_interval = 1.0       # how often to look for the camera
+announce_interval = 10.0  # how often to re-announce this computer while idle
+connect_window = 10.0     # how long to keep trying once the camera is seen
+connect_timeout = 3.0     # one connection attempt
+connect_retry = 0.5       # pause between connection attempts
+op_timeout = 10.0         # longest a camera operation may go without progress
+event_poll = 1.0          # how often to ask the camera for new images
+idle_timeout = 10.0       # end the session once the camera has sent nothing this long
+stall_timeout = 60.0      # restart a session that makes no progress this long
+retry_delay = 1.0         # wait after a failed session
+resync_after = 5.0        # wait after a completed session
+ping_timeout = 1.0        # one reachability check; ping takes whole seconds, at least 1

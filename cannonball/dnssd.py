@@ -77,14 +77,6 @@ def _library():
     return lib
 
 
-def available() -> bool:
-    try:
-        _library()
-        return True
-    except (OSError, AttributeError, TypeError):
-        return False
-
-
 def txt_record(txt: dict[str, str]) -> bytes:
     out = b""
     for key, value in txt.items():
@@ -143,8 +135,15 @@ class Service:
         os.write(self._wake_w, b"x")
 
     def close(self) -> None:
+        """Release every operation, then the wake pipe. Works after the thread has failed too."""
         self.call(self._close_all)
         self._thread.join(consts.DNSSD_LOOP_TICK * 2)
+        if self._thread.is_alive():
+            log.warning("DNS-SD thread did not stop; leaving its descriptors open")
+            return
+        self._close_all()  # the thread is gone, so this thread now owns the operations
+        os.close(self._wake_r)
+        os.close(self._wake_w)
 
     # -- service thread ------------------------------------------------
 
@@ -165,30 +164,40 @@ class Service:
     def _close_all(self) -> None:
         for fd in list(self._ops):
             self.drop(fd)
+        self._done.clear()
         self._closed = True
 
+    def expiring(self) -> int:
+        """Operations in flight that time out (resolves and address lookups)."""
+        return sum(op.expires for op in self._ops.values())
+
     def _run(self) -> None:
-        while not self._closed:
-            readable, _, _ = select.select([self._wake_r, *self._ops], [], [], consts.DNSSD_LOOP_TICK)
-            if self._wake_r in readable:
-                os.read(self._wake_r, 4096)
-                while not self._requests.empty():
-                    self._requests.get()()
-            for fd in readable:
-                op = self._ops.get(fd)
-                if op and self.lib.DNSServiceProcessResult(op.ref) != NO_ERROR:
-                    log.warning("mDNSResponder connection lost")
-                    self.drop(fd)
-                    self.failed.set()
-            for fd in self._done:
+        try:
+            while not self._closed:
+                self._step()
+        except Exception:  # noqa: BLE001 - the owner closes and re-creates a failed service
+            log.exception("DNS-SD thread failed")
+            self.failed.set()
+
+    def _step(self) -> None:
+        readable, _, _ = select.select([self._wake_r, *self._ops], [], [], consts.DNSSD_LOOP_TICK)
+        if self._wake_r in readable:
+            os.read(self._wake_r, 4096)
+            while not self._requests.empty():
+                self._requests.get()()
+        for fd in readable:
+            op = self._ops.get(fd)
+            if op and self.lib.DNSServiceProcessResult(op.ref) != NO_ERROR:
+                log.warning("mDNSResponder connection lost")
                 self.drop(fd)
-            self._done.clear()
-            now = time.monotonic()
-            for fd, op in list(self._ops.items()):
-                if op.expires and now - op.started > consts.DNSSD_RESOLVE_TIMEOUT:
-                    self.drop(fd)
-        os.close(self._wake_r)
-        os.close(self._wake_w)
+                self.failed.set()
+        for fd in self._done:
+            self.drop(fd)
+        self._done.clear()
+        now = time.monotonic()
+        for fd, op in list(self._ops.items()):
+            if op.expires and now - op.started > consts.RESOLVE_TIMEOUT:
+                self.drop(fd)
 
 
 class Registration:
@@ -237,18 +246,10 @@ class Browser:
         self.service = service
         self.interfaces = interfaces
         self.on_found = on_found
-        self._fds: list[int] = []
 
     def start(self) -> None:
+        """Browse until the service is closed."""
         self.service.call(self._browse)
-
-    def stop(self) -> None:
-        self.service.call(self._stop)
-
-    def _stop(self) -> None:
-        for fd in self._fds:
-            self.service.drop(fd)
-        self._fds = []
 
     def _browse(self) -> None:
         @_BrowseReply
@@ -264,9 +265,12 @@ class Browser:
             if error != NO_ERROR:
                 self.service.report(error, f"browsing on interface {index}")
                 continue
-            self._fds.append(self.service.add(ref, found))
+            self.service.add(ref, found)
 
     def _resolve(self, index: int, name: bytes, regtype: bytes, domain: bytes) -> None:
+        if self.service.expiring() >= consts.DNSSD_MAX_RESOLVES:
+            log.debug("too many records at once; skipping %s", name)
+            return
         holder = {}
 
         @_ResolveReply

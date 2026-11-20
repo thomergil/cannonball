@@ -8,23 +8,29 @@ Follows Canon Image Transfer Utility 2's auto-send flow (see canon.py):
              acknowledge (the camera then marks it sent and offers the next)
   CompleteAutoSendImages (0x916D), mode resets, CloseSession
 
-An image is acknowledged only after it is safely on disk, so any failure
-before that makes the camera offer it again next time.
+An image is acknowledged only after its file and folder are flushed to disk,
+so any failure before that makes the camera offer it again next time. The
+camera is untrusted: its file names never choose where a file is written.
 """
 
 import errno
+import fcntl
+import functools
 import logging
+import logging.handlers
 import os
+import shutil
 import sys
 import time
 from datetime import datetime
+from fnmatch import fnmatch
 from pathlib import Path
 
 from . import canon, consts
 from .canon import RC_OK
 from .config import Config
 from .ptpip import Client, ProtocolError
-from .status import Event
+from .status import Event, Progress
 
 log = logging.getLogger("cannonball.worker")
 
@@ -32,10 +38,51 @@ log = logging.getLogger("cannonball.worker")
 OK = 0
 NO_CAMERA = 3  # never got a session within connect_window
 FAILED = 4  # session broke part way; retry
+NO_SPACE = 5  # the disk is full; retry after consts.NO_SPACE_RETRY
+
+# errno values with which fcntl(F_FULLFSYNC) or fsync() reports that the file system does not support the call.
+UNSUPPORTED = {errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL}
 
 
 class SessionError(Exception):
     pass
+
+
+class NoSpace(SessionError):
+    """The download folder's disk is too full; the image waits on the camera."""
+
+
+def flush_to_disk(fd: int) -> None:
+    """Make a file's (or folder's) data survive a power loss. On macOS, fsync()
+    leaves it in the drive's cache and F_FULLFSYNC does not (fsync(2)); network
+    file systems refuse F_FULLFSYNC, and some refuse to sync a folder at all."""
+    if sys.platform == "darwin":
+        try:
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+            return
+        except OSError as e:
+            if e.errno not in UNSUPPORTED:
+                raise
+    try:
+        os.fsync(fd)
+    except OSError as e:
+        if e.errno not in UNSUPPORTED:
+            raise
+        _warn_unflushed(e.strerror)  # once per session
+
+
+@functools.cache
+def _warn_unflushed(reason: str) -> None:
+    log.warning("the file system cannot flush to disk (%s); saving without a flush", reason)
+
+
+def set_times(fd: int, when: datetime) -> None:
+    """Give the file its capture time, if that time is one the system can store."""
+    try:
+        stamp = when.timestamp()
+        os.utime(fd, (stamp, stamp))
+    except (OverflowError, ValueError, OSError) as e:
+        log.debug("keeping the current file time: %s", e)
 
 
 class Session:
@@ -59,8 +106,8 @@ class Session:
     # -- connection ------------------------------------------------------
 
     def connect(self) -> bool:
-        deadline = time.time() + self.cfg.timing.connect_window
-        while time.time() < deadline:
+        deadline = time.monotonic() + self.cfg.timing.connect_window
+        while time.monotonic() < deadline:
             self.beat()
             c = self.client_class(
                 self.host,
@@ -84,17 +131,24 @@ class Session:
 
     # -- transfer --------------------------------------------------------
 
-    def log_records(self, events: bytes) -> None:
-        """Debug: records other than property changes, for decoding what the camera tells us."""
-        if log.isEnabledFor(logging.DEBUG):
-            for kind, body in canon.events(events):
-                if kind not in canon.PROPERTY_RECORDS:
-                    log.debug("record 0x%04X: %s", kind, body[: canon.RECORD_LOG_BYTES].hex())
+    def log_data(self, code: int, data: bytes) -> None:
+        """At DEBUG level, log the start of each reply's data and of each GetEvent
+        record other than property records, for protocol study."""
+        if not (data and log.isEnabledFor(logging.DEBUG)):
+            return
+        if code != canon.GET_EVENT:
+            log.debug("0x%04X data: %s", code, data[: canon.RECORD_LOG_BYTES].hex())
+            return
+        for kind, body in canon.events(data):
+            if kind not in canon.PROPERTY_RECORDS:
+                log.debug("record 0x%04X: %s", kind, body[: canon.RECORD_LOG_BYTES].hex())
 
     def destination(self, name: str, when: datetime, size: int) -> tuple[Path, bool]:
         """Where to save; True if an identical-size file is already there."""
-        sub = self.cfg.download.subfolder.format(date=when) if self.cfg.download.subfolder else ""
-        dest = self.cfg.download.destination / sub / name
+        try:
+            dest = self.cfg.download.folder(when) / name  # name: canon.file_name, a plain file name
+        except ValueError as e:
+            raise SessionError(str(e)) from e
         n = 1
         while dest.exists():
             if dest.stat().st_size == size:
@@ -106,7 +160,7 @@ class Session:
     def transfer(self, handle: int, size: int, path: str) -> None:
         _, raw = self.op(canon.OBJECT_INFO, handle)
         info = canon.object_info(raw)
-        name = info.filename if info and info.filename else Path(path.replace("\\", "/")).name
+        name = canon.file_name(handle, info.filename if info else None, path)
         if info and info.size:
             size = info.size
         if size <= 0:
@@ -117,57 +171,105 @@ class Session:
         dest, have = self.destination(name, when, size)
 
         if not have:
-            self.notify(event=Event.RECEIVING, file=name)
-            self.download(handle, size, dest)
-            self.notify(event=Event.SAVED, path=str(dest), size=size)
-            os.utime(dest, (when.timestamp(), when.timestamp()))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            reserve = self.cfg.download.reserve
+            if shutil.disk_usage(dest.parent).free < size + reserve:
+                raise NoSpace(f"{name}: not enough free space (keeping {reserve // consts.MIB} MiB free)")
+            self.notify(Progress(Event.RECEIVING, file=name))
+            self.download(handle, size, dest, when)
+            self.notify(Progress(Event.SAVED))
         else:
             log.info("%s already saved as %s", name, dest)
         # Only now tell the camera the image is done.
         self.op(canon.TRANSFER_COMPLETE, handle)
         self.op(canon.SAVE_COMPLETE, handle, 0)
 
-    def download(self, handle: int, size: int, dest: Path) -> None:
+    def download(self, handle: int, size: int, dest: Path, when: datetime) -> None:
         if not self.read_ready:
             for code, params in canon.BEFORE_FIRST_READ:  # response codes don't matter
                 self.c.op(code, *params)
             self.read_ready = True
 
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        part = dest.with_name(dest.name + ".part")
+        # No saved image has this name: canon.file_name refuses a leading dot.
+        part = dest.with_name(consts.PARTIAL_NAME.format(name=dest.name))
+        if part.exists():
+            if not self.abandoned(part):
+                raise SessionError(f"{dest.name}: another Cannonball is saving it")
+            part.unlink(missing_ok=True)
+        record = self.cfg.state_dir / consts.STATE_PARTIAL
+        record.parent.mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
+        # Exclusive: never follows a link, and fails (leaving the file alone) if another writer just made it.
+        with part.open("xb") as f:
+            record.write_text(str(part))
+            try:
+                self.receive(handle, size, f, dest.name)
+                set_times(f.fileno(), when)
+                flush_to_disk(f.fileno())
+                part.replace(dest)
+            except BaseException:
+                part.unlink(missing_ok=True)
+                raise
+        record.unlink(missing_ok=True)
+        folder = os.open(dest.parent, os.O_RDONLY)
+        try:
+            flush_to_disk(folder)  # the rename itself
+        finally:
+            os.close(folder)
+        log.info("saved %s (%.1f MiB in %.1fs)", dest, size / consts.MIB, time.monotonic() - started)
+
+    def receive(self, handle: int, size: int, f, name: str) -> None:
+        """Read the whole image into the open file f."""
         # Always from the start: the 90D serves an image as a stream within a
         # session, and a new session's read at a later offset never answers
         # (the camera then cancels the transfer and turns Wi-Fi off).
         offset = 0
-        started = time.monotonic()
-        with part.open("wb") as f:
-            while offset < size:
-                want = min(self.cfg.download.chunk_size, size - offset)
-                _, data = self.op(canon.READ, handle, offset, want, 0, 0)
-                self.c.op(canon.STATUS, canon.STORAGE)
-                if not data:
-                    raise SessionError(f"{dest.name}: no data at offset {offset}")
-                f.write(data[: size - offset])
-                offset += min(len(data), size - offset)
-                self.beat()
-                self.c.op(canon.PROGRESS, handle, min(canon.PROGRESS_DONE, canon.PROGRESS_DONE * offset // size))
-            f.flush()
-            os.fsync(f.fileno())
-        if part.stat().st_size != size:
-            raise SessionError(f"{dest.name}: got {part.stat().st_size} bytes, expected {size}")
-        part.replace(dest)
-        elapsed = time.monotonic() - started
-        log.info("saved %s (%.1f MiB in %.1fs)", dest, size / consts.MIB, elapsed)
+        while offset < size:
+            want = min(self.cfg.download.chunk_size, size - offset)
+            _, data = self.op(canon.READ, handle, offset, want, 0, 0)
+            self.c.op(canon.STATUS, canon.STORAGE)
+            if not data:
+                raise SessionError(f"{name}: no data at offset {offset}")
+            f.write(data[: size - offset])
+            offset += min(len(data), size - offset)
+            self.beat()
+            self.c.op(canon.PROGRESS, handle, min(canon.PROGRESS_DONE, canon.PROGRESS_DONE * offset // size))
+        f.flush()
+
+    def abandoned(self, part: Path) -> bool:
+        """True if nobody has written to part for stall_timeout (a session that
+        was still writing it would have been stopped by now), or its time is in
+        the future (a clock was set back)."""
+        age = time.time() - part.lstat().st_mtime
+        return age > self.cfg.timing.stall_timeout or age < 0
+
+    def remove_partial(self) -> None:
+        """Remove the temp file of the last session, if it was killed mid-download.
+
+        Only one session runs per state_dir, so a recorded file is no longer written."""
+        record = self.cfg.state_dir / consts.STATE_PARTIAL
+        try:
+            part = Path(record.read_text())
+            inside = part.resolve().is_relative_to(self.cfg.download.destination.resolve())
+            if inside and fnmatch(part.name, consts.PARTIAL_NAME.format(name="*")):
+                log.info("removing %s, left by an interrupted session", part)
+                part.unlink(missing_ok=True)
+        except FileNotFoundError:
+            return  # no record: the last session ended cleanly
+        except (OSError, ValueError) as e:  # unreadable or damaged record
+            log.warning("ignoring %s: %s", record, e)
+        record.unlink(missing_ok=True)
 
     # -- the session -----------------------------------------------------
 
     def run(self) -> int:
+        self.remove_partial()
         if not self.connect():
             log.info("%s: no PTP/IP session within %.0fs", self.host, self.cfg.timing.connect_window)
             if self.connect_error == errno.EHOSTUNREACH and sys.platform == "darwin":
                 # The camera answers pings, but macOS refuses our connections.
                 log.warning("%s", consts.LOCAL_NETWORK_HINT)
-                self.notify(event=Event.ERROR, message=consts.LOCAL_NETWORK_HINT)
+                self.notify(Progress(Event.REFUSED))
             return NO_CAMERA
         c = self.c
         try:
@@ -177,6 +279,7 @@ class Session:
             events = None
             for code, params in [(canon.OPEN_SESSION, (canon.SESSION_ID,)), *canon.SETUP]:
                 rc, _, data = c.op(code, *params)
+                self.log_data(code, data)
                 if rc != RC_OK:
                     failed.append(f"0x{code:04X}: 0x{rc:04X}")
                 if code == canon.GET_EVENT and events is None:
@@ -184,26 +287,26 @@ class Session:
             if failed:
                 raise SessionError(f"setup failed ({', '.join(failed)})")
             self.beat()
-            self.notify(event=Event.CONNECTED)
+            self.notify(Progress(Event.CONNECTED))
 
             count = 0
-            idle_since = time.time()
+            idle_since = time.monotonic()
             while True:
-                self.log_records(events)
                 objects = canon.objects(events)
                 for obj in objects:
                     self.transfer(obj.handle, obj.size, obj.path)
                     count += 1
-                    idle_since = time.time()
+                    idle_since = time.monotonic()
                 if not objects:
-                    if time.time() - idle_since > self.cfg.timing.idle_timeout:
+                    if time.monotonic() - idle_since > self.cfg.timing.idle_timeout:
                         break
                     time.sleep(self.cfg.timing.event_poll)
                 self.beat()
                 _, events = self.op(canon.GET_EVENT)
+                self.log_data(canon.GET_EVENT, events)
 
             log.info("%s: nothing more to send; %d image(s) received", self.host, count)
-            self.notify(event=Event.FINISHED, count=count)
+            self.notify(Progress(Event.FINISHED, count=count))
             for code, params in canon.FINISH:  # sent in full whatever the response codes
                 rc, _, _ = c.op(code, *params)
                 log.debug("finish 0x%04X -> 0x%04X", code, rc)
@@ -214,9 +317,6 @@ class Session:
 
 def main(cfg: Config, host: str, heartbeat, log_queue, events) -> None:
     """Child-process entry point (multiprocessing, spawn)."""
-    import logging.handlers
-    import sys
-
     root = logging.getLogger()
     root.handlers[:] = [logging.handlers.QueueHandler(log_queue)]
     root.setLevel(cfg.log_level)
@@ -224,13 +324,17 @@ def main(cfg: Config, host: str, heartbeat, log_queue, events) -> None:
     def beat():
         heartbeat.value = time.time()
 
-    def notify(**event):
-        events.put(event)
+    def notify(progress: Progress) -> None:
+        events.put(progress)
 
     try:
         code = Session(cfg, host, beat, notify).run()
+    except NoSpace as e:
+        log.warning("%s: %s", host, e)
+        notify(Progress(Event.ERROR, message=str(e)))
+        code = NO_SPACE
     except Exception as e:  # noqa: BLE001 - report every failure to the supervisor and retry
         log.warning("%s: session failed: %s", host, e, exc_info=log.isEnabledFor(logging.DEBUG))
-        notify(event=Event.ERROR, message=f"session failed: {e}")
+        notify(Progress(Event.ERROR, message=f"session failed: {e}"))
         code = FAILED
     sys.exit(code)

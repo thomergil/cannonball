@@ -23,9 +23,9 @@ def open_at_login() -> str | None:
         return None
     ok, err = item.registerAndReturnError_(None)
     if item.status() == SMAppServiceStatusRequiresApproval:
-        return f"Allow {consts.APP_NAME} in System Settings > General > Login Items"
+        return consts.LOGIN_ITEM_HINT
     if not ok:
-        problem = f"Could not open {consts.APP_NAME} at login: {err.localizedDescription() if err else '?'}"
+        problem = consts.LOGIN_ITEM_FAILED.format(reason=err.localizedDescription() if err else "?")
         log.error("%s", problem)
         return problem
     return None

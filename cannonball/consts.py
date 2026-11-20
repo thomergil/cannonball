@@ -1,6 +1,7 @@
-"""Fixed identifiers. Tunable values live in defaults.toml."""
+"""Fixed values. Settings a user may change live in defaults.toml."""
 
 MIB = 1024 * 1024
+PARTIAL_NAME = ".{name}.cannonball"  # an image while it downloads, next to where it goes
 
 APP_NAME = "Cannonball"
 PACKAGE = "cannonball"
@@ -35,27 +36,34 @@ ITU2_GUID_KEY = "ITU-initiatorGUID"
 
 # Files in state_dir.
 STATE_GUID = "guid"
-STATE_ALERTED = "local-network-alert-shown"  # the access dialog is shown once, ever
+STATE_ALERTED = "local-network-alert-shown"  # present once the Local Network dialog was shown; removed when a session connects
 STATE_HOSTS = "hosts.json"
+STATE_PARTIAL = "partial"  # path of the temp file being written, so the next session can remove it if this one is killed
 
 # Status shown by the menu bar.
-MENU_REFRESH_SECONDS = 0.4  # also one step of the Wi-Fi badge animation
+MENU_REFRESH_SECONDS = 0.4  # also one step of the Wi-Fi fan animation
 
-# DNS-SD lookups (macOS): give up on a camera record that does not resolve.
-DNSSD_RESOLVE_TIMEOUT = 5.0
-DNSSD_LOOP_TICK = 1.0
+# Discovery: give up on a camera record that does not resolve (seconds).
+RESOLVE_TIMEOUT = 5.0
+DNSSD_LOOP_TICK = 1.0  # seconds; longest select() wait on the DNS-SD thread
+DNSSD_MAX_RESOLVES = 16  # records resolved at once; further records are skipped, so a flood cannot exhaust file descriptors
+REMEMBERED_HOSTS = 4  # camera addresses found on the network and kept across runs
 
 # Waiting for a helper process (mDNS tools) to exit before killing it.
-SUBPROCESS_STOP_TIMEOUT = 5.0
+SUBPROCESS_STOP_TIMEOUT = 5.0  # seconds
+NO_SPACE_RETRY = 60.0  # seconds before trying a camera again after the disk was full
+DISCOVERY_RETRY = 10.0  # seconds between attempts to restart failed announcing/browsing
 
 # macOS app bundle.
 MIN_MACOS = "13.0"  # SMAppService login item
 DEVELOPMENT_REGION = "en"
 LOCAL_NETWORK_USAGE = f"{APP_NAME} receives photos from your camera over the local network."
 LOCAL_NETWORK_HINT = f"Allow {APP_NAME} in System Settings > Privacy & Security > Local Network"
+LOGIN_ITEM_HINT = f"Allow {APP_NAME} in System Settings > General > Login Items"
+LOGIN_ITEM_FAILED = f"Could not open {APP_NAME} at login: {{reason}}"
 LICENSE_NAME = "MIT License"
 # macOS 26 has no link to the Local Network page itself, only to Privacy & Security.
 LOCAL_NETWORK_SETTINGS = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
-PROBE_PORT = 9  # connected to, never sent to
-LOCAL_NETWORK_GRACE = 30.0  # seconds to answer macOS's own question before we complain
+PROBE_PORT = 9  # discard (RFC 863): localnet connects a UDP socket to it and sends nothing
+LOCAL_NETWORK_GRACE = 30.0  # seconds the user has to answer the macOS Local Network prompt before Cannonball explains how to allow access
 LOCAL_NETWORK_RECHECK = 5.0  # seconds between checks while access is missing

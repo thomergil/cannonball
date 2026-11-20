@@ -4,9 +4,12 @@ The sequence was documented by epsimatic/canon-wifi-downloader (PROTOCOL.md),
 from captures of Canon Image Transfer Utility 2 talking to an EOS 250D.
 """
 
+import re
 import struct
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import PureWindowsPath
 
 RC_OK = 0x2001
 
@@ -53,6 +56,14 @@ OBJECT_RECORD = 0xC1AB  # an image the camera wants to send
 PROPERTY_RECORDS = {0xC189, 0xC18A}  # property values and their allowed values
 RECORD_LOG_BYTES = 64
 
+# A camera-supplied file name is used only if it is a plain name like IMG_0001.CR3
+# with an extension of a file type Canon cameras make: never one a double-click runs.
+MAX_FILE_NAME = 128
+FILE_NAME = re.compile(rf"[A-Za-z0-9_][A-Za-z0-9._-]{{0,{MAX_FILE_NAME - 1}}}")
+MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".cr2", ".cr3", ".crw", ".hif", ".heif", ".heic", ".tif", ".tiff",
+                    ".mp4", ".mov", ".avi", ".crm", ".wav", ".thm"}
+FALLBACK_NAME = "IMG_{handle:08X}"  # when the camera offers no usable name
+
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S"  # object info timestamps, e.g. 20260708T091035.0
 TIMESTAMP_LENGTH = len("20260708T091035")
 
@@ -74,17 +85,18 @@ class ObjectInfo:
     time2: str = ""
 
 
-def events(data: bytes) -> list[tuple[int, bytes]]:
-    """Split GetEvent data into (kind, body) records: [u32 length][u32 kind][body]."""
-    out = []
+def events(data: bytes) -> Iterator[tuple[int, bytes]]:
+    """Split GetEvent data into (kind, body) records: [u32 length][u32 kind][body].
+
+    A generator, so a reply of many tiny records costs no more memory than the reply.
+    """
     pos = 0
     while pos + 8 <= len(data):
         length, kind = struct.unpack_from("<II", data, pos)
         if length < 8 or pos + length > len(data):
-            break
-        out.append((kind, data[pos + 8 : pos + length]))
+            return
+        yield kind, data[pos + 8 : pos + length]
         pos += length
-    return out
 
 
 def objects(data: bytes) -> list[ObjectRecord]:
@@ -137,3 +149,18 @@ def capture_time(stamp: str) -> datetime | None:
         return datetime.strptime(stamp[:TIMESTAMP_LENGTH], TIMESTAMP_FORMAT)
     except ValueError:
         return None
+
+
+def file_name(handle: int, *candidates: str | None) -> str:
+    """A safe local file name for an image: the last component of the first
+    candidate that is a plain file name, else one made from the handle.
+
+    The candidates come from the camera, which is untrusted: a name with a
+    directory part, a leading dot or dash, characters other than letters,
+    digits, '.', '_' and '-', or an extension outside MEDIA_EXTENSIONS is never used.
+    """
+    for raw in candidates:
+        name = PureWindowsPath(raw or "").name  # splits on / and \, and drops a B: drive
+        if FILE_NAME.fullmatch(name) and PureWindowsPath(name).suffix.lower() in MEDIA_EXTENSIONS:
+            return name
+    return FALLBACK_NAME.format(handle=handle)

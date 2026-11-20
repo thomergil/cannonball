@@ -2,6 +2,7 @@
 
 import threading
 import time
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 
@@ -20,6 +21,33 @@ class Event(StrEnum):
     SAVED = "saved"
     FINISHED = "finished"
     ERROR = "error"
+    REFUSED = "refused"  # the camera answered pings, but the system refused our connections
+
+
+@dataclass(frozen=True)
+class Progress:
+    """One worker report, sent to the supervisor through a queue."""
+
+    event: Event
+    file: str | None = None  # RECEIVING
+    count: int = 0  # FINISHED: images received in the session
+    message: str | None = None  # ERROR
+
+
+@dataclass(frozen=True)
+class LastSession:
+    time: float
+    count: int
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    state: State = State.WAITING
+    file: str | None = None  # being received
+    received: int = 0  # images in the current or last session
+    last_session: LastSession | None = None
+    error: str | None = None
+    refused: bool = False
 
 
 class Status:
@@ -27,33 +55,30 @@ class Status:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._data = {
-            "state": State.WAITING,
-            "file": None,
-            "received": 0,  # images in the current or last session
-            "last_session": None,  # {"time", "count"}
-            "error": None,
-        }
+        self._snapshot = Snapshot()
 
     @property
-    def data(self) -> dict:
+    def snapshot(self) -> Snapshot:
         with self._lock:
-            return dict(self._data)
+            return self._snapshot
 
     def set(self, **changes) -> None:
         with self._lock:
-            self._data.update(changes)
+            self._snapshot = replace(self._snapshot, **changes)
 
-    def event(self, ev: dict) -> None:
-        """Apply a progress event sent by a worker."""
-        kind = ev.get("event")
-        if kind == Event.CONNECTED:
-            self.set(state=State.RECEIVING, received=0, file=None, error=None)
-        elif kind == Event.RECEIVING:
-            self.set(file=ev.get("file"))
-        elif kind == Event.SAVED:
-            self.set(received=self.data["received"] + 1, file=None)
-        elif kind == Event.FINISHED:
-            self.set(last_session={"time": time.time(), "count": ev.get("count", 0)}, file=None)
-        elif kind == Event.ERROR:
-            self.set(error=ev.get("message"))
+    def event(self, progress: Progress) -> None:
+        """Apply a worker's report."""
+        match progress.event:
+            case Event.CONNECTED:
+                self.set(state=State.RECEIVING, received=0, file=None, error=None, refused=False)
+            case Event.RECEIVING:
+                self.set(file=progress.file)
+            case Event.SAVED:
+                with self._lock:
+                    self._snapshot = replace(self._snapshot, received=self._snapshot.received + 1, file=None)
+            case Event.FINISHED:
+                self.set(last_session=LastSession(time.time(), progress.count), file=None)
+            case Event.ERROR:
+                self.set(error=progress.message)
+            case Event.REFUSED:
+                self.set(refused=True)
