@@ -1,4 +1,4 @@
-<img src="packaging/macos/icon.png" width="96" alt="">
+<img src="https://raw.githubusercontent.com/thomergil/cannonball/main/packaging/macos/icon.png" width="96" alt="">
 
 # Cannonball
 
@@ -12,18 +12,19 @@ with an EOS 90D.
 [Cannonball.dmg](https://github.com/thomergil/cannonball/releases/latest/download/Cannonball.dmg)
 ([SHA-256](https://github.com/thomergil/cannonball/releases/latest/download/Cannonball.dmg.sha256)), drag
 Cannonball to Applications, open it, and allow local network access. It lives
-in the menu bar and opens at login.
-
-**Linux** (Python 3.11+; uses avahi-daemon if it is running, otherwise python-zeroconf):
+in the menu bar and opens at login. Or with Homebrew:
 
 ```sh
-git clone https://github.com/thomergil/cannonball
-cd cannonball
-python3 -m venv env
-env/bin/pip install --require-hashes --only-binary :all: -r requirements.txt
-mkdir -p ~/.config/systemd/user
-sed "s|@CHECKOUT@|$PWD|g" packaging/linux/cannonball.service > ~/.config/systemd/user/cannonball.service
-systemctl --user enable --now cannonball
+brew tap thomergil/tap
+brew trust --cask thomergil/tap/cannonball   # Homebrew asks before loading a cask from a tap
+brew install --cask thomergil/tap/cannonball
+```
+
+**Linux** (Python 3.11+, systemd; uses avahi-daemon if it is running, otherwise python-zeroconf):
+
+```sh
+uv tool install cannonball-eos   # or: pipx install cannonball-eos
+cannonball --install-service     # runs it now and at login
 ```
 
 ## Pair the camera
@@ -47,7 +48,7 @@ destination = "~/Pictures"
 subfolder = "{date:%Y_%m_%d}"  # by capture date; "" for none
 ```
 
-Every setting is in [`cannonball/defaults.toml`](cannonball/defaults.toml).
+Every setting is in [`cannonball/defaults.toml`](https://github.com/thomergil/cannonball/blob/main/cannonball/defaults.toml).
 Restart Cannonball after a change (Linux: `systemctl --user restart cannonball`). Logs: `~/Library/Logs/cannonball.log` (macOS),
 `~/.local/state/cannonball/cannonball.log` (Linux).
 
@@ -87,7 +88,8 @@ scripts/build-macos.sh            # dist/Cannonball-<version>.dmg
   [ifaddr](https://github.com/ifaddr/ifaddr) (MIT), [PyObjC](https://github.com/ronaldoussoren/pyobjc) (MIT).
   The app is built with [PyInstaller](https://github.com/pyinstaller/pyinstaller) on
   [python-build-standalone](https://github.com/astral-sh/python-build-standalone).
-- Supply chain: dependencies are wheels pinned by SHA-256 (matching PyPI), the
+- Supply chain: the Mac app and the tests use dependency wheels pinned by
+  SHA-256 (matching PyPI), and the PyPI package pins the same versions. The
   bundled Python is checksum-verified by [uv](https://github.com/astral-sh/uv),
   and CI actions are pinned by commit.
 

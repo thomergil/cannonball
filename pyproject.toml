@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cannonball-eos"
+dynamic = ["version"]
+description = "Saves the photos a Canon EOS camera sends with Auto send images to computer"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+# The versions requirements.txt pins by hash, and the tests run against.
+dependencies = ["ifaddr==0.2.0", "zeroconf==0.154.0"]
+classifiers = [
+    "Environment :: No Input/Output (Daemon)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics :: Capture :: Digital Camera",
+]
+
+[project.urls]
+Homepage = "https://github.com/thomergil/cannonball"
+
+[project.scripts]
+cannonball = "cannonball.__main__:main"
+
+[tool.hatch.version]
+path = "cannonball/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cannonball"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/cannonball", "/LICENSE", "/README.md"]

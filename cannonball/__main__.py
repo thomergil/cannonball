@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, consts, discovery, worker
+from . import config, consts, discovery, systemd, worker
 from .status import State, Status
 
 log = logging.getLogger(consts.PACKAGE)
@@ -270,6 +270,7 @@ def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("-c", "--config", type=Path, help=f"config file (default {config.DEFAULT_PATH})")
     ap.add_argument("--once", action="store_true", help="exit after the first completed sync")
     ap.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    ap.add_argument("--install-service", action="store_true", help="run Cannonball now and at login (Linux, systemd)")
     args, _ = ap.parse_known_args(argv)  # Finder may add its own arguments
     return args
 
@@ -285,7 +286,11 @@ def supervisor(args: argparse.Namespace) -> tuple[Supervisor, logging.handlers.Q
 
 
 def main() -> None:
-    sup, listener = supervisor(arguments())
+    args = arguments()
+    if args.install_service:
+        systemd.install()
+        return
+    sup, listener = supervisor(args)
     signal.signal(signal.SIGTERM, lambda *_: sup.stop.set())
     try:
         sup.run()

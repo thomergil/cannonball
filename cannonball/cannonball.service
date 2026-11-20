@@ -1,0 +1,13 @@
+# systemd user service, written by `cannonball --install-service`, which fills in @PYTHON@.
+[Unit]
+Description=Cannonball: receive photos from Canon EOS cameras over Wi-Fi
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart="@PYTHON@" -m cannonball
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
