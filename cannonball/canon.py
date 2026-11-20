@@ -50,6 +50,8 @@ FINISH = [
 ]
 
 OBJECT_RECORD = 0xC1AB  # an image the camera wants to send
+PROPERTY_RECORDS = {0xC189, 0xC18A}  # property values and their allowed values
+RECORD_LOG_BYTES = 64
 
 TIMESTAMP_FORMAT = "%Y%m%dT%H%M%S"  # object info timestamps, e.g. 20260708T091035.0
 TIMESTAMP_LENGTH = len("20260708T091035")

@@ -39,7 +39,7 @@ STATE_ALERTED = "local-network-alert-shown"  # the access dialog is shown once, 
 STATE_HOSTS = "hosts.json"
 
 # Status shown by the menu bar.
-MENU_REFRESH_SECONDS = 1.0
+MENU_REFRESH_SECONDS = 0.4  # also one step of the Wi-Fi badge animation
 
 # DNS-SD lookups (macOS): give up on a camera record that does not resolve.
 DNSSD_RESOLVE_TIMEOUT = 5.0

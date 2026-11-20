@@ -22,25 +22,27 @@ from AppKit import (
     NSWorkspace,
     NSWorkspaceOpenConfiguration,
 )
-from Foundation import NSURL, NSBundle, NSObject, NSTimer
+from Foundation import NSURL, NSBundle, NSMakeRect, NSMakeSize, NSObject, NSTimer
 from PyObjCTools import AppHelper
 
 from . import consts, localnet, services
 from .__main__ import Supervisor, arguments, supervisor
 from .status import State
 
-ICONS = {  # SF Symbols
-    State.WAITING: "camera",
-    State.CAMERA: "camera.badge.ellipsis",
-    State.RECEIVING: "arrow.down.circle.fill",
-    State.DOWN: "exclamationmark.triangle",
-}
-FALLBACK_ICON = ICONS[State.WAITING]
+# SF Symbols. While the camera is connected, the icon is the camera with a
+# Wi-Fi badge that fills up arc by arc, over and over.
+CAMERA_ICON = "camera"
+BADGE_ICON = "wifi"
+DOWN_ICON = "exclamationmark.triangle"
+BADGED = {State.CAMERA, State.RECEIVING}
+BADGE_SCALE = 0.6  # of the camera's height
+BADGE_OVERLAP = 0.2  # of the badge's width, over the camera's corner
+BADGE_FRAMES = (1 / 3, 2 / 3, 1.0)  # variable value: one, two, three arcs
 
 TEXT = {
     State.WAITING: "Waiting for camera",
     State.CAMERA: "Connecting…",
-    State.RECEIVING: "Transferring photo {n}…",
+    State.RECEIVING: "Transferring {n}…",
     State.DOWN: f"{consts.APP_NAME} is not running",
     "last": "Last: {count} image(s), {ago}",
     "error": "Last error: {error}",
@@ -62,11 +64,28 @@ ERROR_CHARS = 100
 MINUTE, HOUR, DAY = 60, 3600, 86400
 
 
-def symbol(name: str):
-    img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, consts.APP_NAME)
-    if img is None:  # symbol missing on this macOS version
-        img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(FALLBACK_ICON, consts.APP_NAME)
+def symbol(name: str, value: float | None = None):
+    if value is None:
+        img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, consts.APP_NAME)
+    else:
+        img = NSImage.imageWithSystemSymbolName_variableValue_accessibilityDescription_(name, value, consts.APP_NAME)
     img.setTemplate_(True)  # follows the light/dark menu bar
+    return img
+
+
+def badged(base, badge):
+    """base with badge small at its top right, drawn at whatever resolution the screen needs."""
+    w, h = base.size().width, base.size().height
+    side = h * BADGE_SCALE
+    overlap = side * BADGE_OVERLAP
+
+    def draw(rect) -> bool:
+        base.drawInRect_(NSMakeRect(0, 0, w, h))
+        badge.drawInRect_(NSMakeRect(w - overlap, h - side, side, side))
+        return True
+
+    img = NSImage.imageWithSize_flipped_drawingHandler_(NSMakeSize(w - overlap + side, h), False, draw)
+    img.setTemplate_(True)
     return img
 
 
@@ -108,7 +127,10 @@ class MenuBar(NSObject):
             localnet.request(hosts[0])  # macOS asks now, while the user is here
         self.thread = threading.Thread(target=sup.run, name=consts.PACKAGE, daemon=True)
         self.thread.start()
-        self.icon = None
+        camera = symbol(CAMERA_ICON)
+        self.idle, self.down = camera, symbol(DOWN_ICON)
+        self.frames = [badged(camera, symbol(BADGE_ICON, value)) for value in BADGE_FRAMES]
+        self.frame = 0
         self.problem = services.open_at_login()
 
         self.item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
@@ -140,11 +162,11 @@ class MenuBar(NSObject):
     def refresh_(self, _timer) -> None:
         st = self.sup.status.data
         state = st["state"] if self.thread.is_alive() else State.DOWN
-        if state != self.icon:
-            self.item.button().setImage_(symbol(ICONS[state]))
-            self.icon = state
-        received = st.get("received", 0)
-        self.item.button().setTitle_(f" {received}" if state == State.RECEIVING and received else "")
+        if state in BADGED:
+            self.frame = (self.frame + 1) % len(self.frames)
+            self.item.button().setImage_(self.frames[self.frame])
+        else:
+            self.item.button().setImage_(self.down if state == State.DOWN else self.idle)
         title, detail = describe(state, st, self.problem or (consts.LOCAL_NETWORK_HINT if self.blocked() else None))
         self.status_line.setTitle_(title)
         self.detail_line.setTitle_(detail)

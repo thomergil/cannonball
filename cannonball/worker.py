@@ -84,6 +84,13 @@ class Session:
 
     # -- transfer --------------------------------------------------------
 
+    def log_records(self, events: bytes) -> None:
+        """Debug: records other than property changes, for decoding what the camera tells us."""
+        if log.isEnabledFor(logging.DEBUG):
+            for kind, body in canon.events(events):
+                if kind not in canon.PROPERTY_RECORDS:
+                    log.debug("record 0x%04X: %s", kind, body[: canon.RECORD_LOG_BYTES].hex())
+
     def destination(self, name: str, when: datetime, size: int) -> tuple[Path, bool]:
         """Where to save; True if an identical-size file is already there."""
         sub = self.cfg.download.subfolder.format(date=when) if self.cfg.download.subfolder else ""
@@ -182,6 +189,7 @@ class Session:
             count = 0
             idle_since = time.time()
             while True:
+                self.log_records(events)
                 objects = canon.objects(events)
                 for obj in objects:
                     self.transfer(obj.handle, obj.size, obj.path)
