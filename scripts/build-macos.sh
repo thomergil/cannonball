@@ -37,7 +37,9 @@ if [ -z "${SIGNING_IDENTITY:-}" ]; then
 fi
 SIGNING_IDENTITY=${SIGNING_IDENTITY:--}
 
-"$B/venv/bin/pyinstaller" --noconfirm --clean --log-level WARN \
+ICON=$PWD/$B/$APP_NAME.icns
+"$VPY" packaging/macos/icon.py "$ICON"
+ICON=$ICON "$B/venv/bin/pyinstaller" --noconfirm --clean --log-level WARN \
   --distpath "$B/dist" --workpath "$B/work" packaging/macos/Cannonball.spec
 
 if [ "$SIGNING_IDENTITY" = - ]; then
@@ -64,4 +66,10 @@ if [ "$SIGNING_IDENTITY" != - ]; then
   fi
 fi
 (cd dist && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
+
+# Leave only the image: macOS mixes up apps with several copies installed
+# (TN3179, FB15568200), and LaunchServices registers these build copies.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSREGISTER" -u "$APP" "$B/dmg/$APP_NAME.app" 2>/dev/null || true
+rm -rf "$B/dist" "$B/dmg"
 echo "$DMG"

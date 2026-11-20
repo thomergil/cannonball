@@ -6,7 +6,7 @@ import time
 from conftest import GUID, images
 from fakecam import FakeCamera
 
-from cannonball import canon, status
+from cannonball import canon
 from cannonball.__main__ import Supervisor, setup_logging
 
 
@@ -34,7 +34,7 @@ def test_daemon_receives_everything(cfg_for):
         sup, thread, listener = start(cfg)
         assert stop(sup, thread, listener), "no complete session within 60 s"
     assert cam.acked == [img.handle for img in imgs]
-    st = status.read(cfg.state_dir)
+    st = sup.status.data
     assert st["last_session"]["count"] == 3
 
 
@@ -60,4 +60,4 @@ def test_session_failures_are_retried(cfg_for):
         assert stop(sup, thread, listener)
     assert cam.sessions >= 2
     assert cam.acked == [img.handle for img in imgs]
-    assert "session failed" in (status.read(cfg.state_dir).get("error") or "") or cam.sessions >= 2
+    assert "session failed" in (sup.status.data["error"] or "") or cam.sessions >= 2

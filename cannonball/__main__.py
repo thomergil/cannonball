@@ -92,7 +92,7 @@ class Supervisor:
         self.last_announce = 0.0
         self.discovery: discovery.Discovery | None = None
         self.events = self.ctx.Queue()  # progress events from workers
-        self.status = Status(cfg.state_dir)
+        self.status = Status()
 
     def on_camera(self, host: str, txt: dict) -> None:
         if self.hosts.add(host):
@@ -185,7 +185,7 @@ class Supervisor:
             return True
         self.drain_events()
         if self.discovery and not self.discovery.alive():
-            log.warning("mDNS announcement or browsing failed; restarting it")
+            log.debug("restarting mDNS announcement and browsing")
             self.announce()
 
         busy = self.proc is not None
@@ -252,18 +252,24 @@ def setup_logging(cfg: config.Config, verbose: bool):
     return queue, listener
 
 
-def main() -> None:
+def arguments(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog=consts.PACKAGE, description="Receive Canon EOS Wi-Fi auto-send transfers.")
     ap.add_argument("-c", "--config", type=Path, help=f"config file (default {config.DEFAULT_PATH})")
     ap.add_argument("--once", action="store_true", help="exit after the first completed sync")
     ap.add_argument("-v", "--verbose", action="store_true", help="debug logging")
-    args = ap.parse_args()
+    args, _ = ap.parse_known_args(argv)  # Finder may add its own arguments
+    return args
 
+
+def supervisor(args: argparse.Namespace) -> tuple[Supervisor, logging.handlers.QueueListener]:
     cfg = config.load(args.config)
     queue, listener = setup_logging(cfg, args.verbose)
     log.debug("config: %s", cfg)
+    return Supervisor(cfg, queue, args.once), listener
 
-    sup = Supervisor(cfg, queue, args.once)
+
+def main() -> None:
+    sup, listener = supervisor(arguments())
     signal.signal(signal.SIGTERM, lambda *_: sup.stop.set())
     try:
         sup.run()

@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 
 from . import consts
@@ -71,6 +72,10 @@ class Discovery(ABC):
     def close(self) -> None:
         """Stop everything."""
 
+    def denied(self) -> bool:
+        """True while the system refuses this program Local Network access."""
+        return False
+
 
 class MacDiscovery(Discovery):
     """Through mDNSResponder's DNS-SD API."""
@@ -82,22 +87,33 @@ class MacDiscovery(Discovery):
         self.dnssd = dnssd
         self.service = None
         self.registration = None
+        self.denied_at: float | None = None
+
+    def _denied(self) -> None:
+        self.denied_at = time.monotonic()
+
+    def denied(self) -> bool:
+        return self.denied_at is not None and time.monotonic() - self.denied_at < consts.LOCAL_NETWORK_RECHECK
 
     def start(self) -> None:
         interfaces = sorted(self.cfg.networks.interfaces())
-        self.service = self.dnssd.Service()
+        self.service = self.dnssd.Service(self._denied)
         self.registration = self.dnssd.Registration(self.service, self.cfg.name, self.cfg.announce_port, self.txt, interfaces)
         self.dnssd.Browser(self.service, interfaces, self.found).start()
 
     def announce(self) -> None:
-        if self.service is None or self.service.failed.is_set():
+        if self.service is None or self.service.failed.is_set() or self.denied_at is not None:
             self.close()
+            self.denied_at = None  # the new browse finds out again
             self.start()
         self.registration.stop()
         self.registration.start()
 
     def alive(self) -> bool:
-        return self.service is not None and not self.service.failed.is_set()
+        """False after a failure, and once a while after a refusal, to try again."""
+        if self.service is None or self.service.failed.is_set():
+            return False
+        return self.denied_at is None or time.monotonic() - self.denied_at < consts.LOCAL_NETWORK_RECHECK
 
     def close(self) -> None:
         if self.service:
@@ -241,3 +257,4 @@ def create(cfg: Config, on_camera: OnCamera) -> Discovery:
     if AvahiDiscovery.usable():
         return AvahiDiscovery(cfg, on_camera)
     return ZeroconfDiscovery(cfg, on_camera)
+

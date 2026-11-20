@@ -4,10 +4,7 @@ MIB = 1024 * 1024
 
 APP_NAME = "Cannonball"
 PACKAGE = "cannonball"
-BUNDLE_ID = "com.thomer.cannonball"
-DAEMON_LABEL = f"{BUNDLE_ID}.daemon"
-DAEMON_PLIST = f"{DAEMON_LABEL}.plist"
-DAEMON_ARG = "daemon"  # Cannonball.app argument that runs the daemon
+BUNDLE_ID = "com.thomergil.cannonball"
 
 CONFIG_PATH = f"~/.config/{PACKAGE}/config.toml"
 LOG_FILE_AUTO = "auto"
@@ -38,8 +35,8 @@ ITU2_GUID_KEY = "ITU-initiatorGUID"
 
 # Files in state_dir.
 STATE_GUID = "guid"
+STATE_ALERTED = "local-network-alert-shown"  # the access dialog is shown once, ever
 STATE_HOSTS = "hosts.json"
-STATE_STATUS = "status.json"
 
 # Status shown by the menu bar.
 MENU_REFRESH_SECONDS = 1.0
@@ -52,7 +49,13 @@ DNSSD_LOOP_TICK = 1.0
 SUBPROCESS_STOP_TIMEOUT = 5.0
 
 # macOS app bundle.
-MIN_MACOS = "13.0"  # SMAppService
+MIN_MACOS = "13.0"  # SMAppService login item
+DEVELOPMENT_REGION = "en"
 LOCAL_NETWORK_USAGE = f"{APP_NAME} receives photos from your camera over the local network."
+LOCAL_NETWORK_HINT = f"Allow {APP_NAME} in System Settings > Privacy & Security > Local Network"
 LICENSE_NAME = "MIT License"
-DAEMON_THROTTLE_SECONDS = 10  # launchd: least time between daemon restarts
+# macOS 26 has no link to the Local Network page itself, only to Privacy & Security.
+LOCAL_NETWORK_SETTINGS = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
+PROBE_PORT = 9  # connected to, never sent to
+LOCAL_NETWORK_GRACE = 30.0  # seconds to answer macOS's own question before we complain
+LOCAL_NETWORK_RECHECK = 5.0  # seconds between checks while access is missing

@@ -23,6 +23,7 @@ from . import consts
 log = logging.getLogger(__name__)
 
 NO_ERROR = 0
+POLICY_DENIED = -65570  # kDNSServiceErr_PolicyDenied: no Local Network access
 FLAG_ADD = 0x2
 PROTOCOL_IPV4 = 0x1
 SOCKADDR_IN_ADDR = slice(4, 8)  # sin_addr in struct sockaddr_in, on both BSD and Linux layouts
@@ -114,8 +115,9 @@ class _Op:
 class Service:
     """A connection to mDNSResponder and the thread that serves it."""
 
-    def __init__(self):
+    def __init__(self, on_denied: Callable[[], None] = lambda: None):
         self.lib = _library()
+        self.on_denied = on_denied
         self._ops: dict[int, _Op] = {}  # by socket fd; touched only on the service thread
         self._done: set[int] = set()  # finished inside their own callback; released after it returns
         self._requests: queue.Queue = queue.Queue()
@@ -124,6 +126,16 @@ class Service:
         self.failed = threading.Event()  # mDNSResponder went away; re-create everything
         self._thread = threading.Thread(target=self._run, name="dnssd", daemon=True)
         self._thread.start()
+
+    def report(self, error: int, what: str, fatal: bool = True) -> None:
+        """Note a failed operation. A fatal failure makes the owner re-create the service."""
+        if error == POLICY_DENIED:
+            log.info("%s: no Local Network access", what)
+            self.on_denied()
+            return
+        log.warning("%s failed: DNS-SD error %d", what, error)
+        if fatal:
+            self.failed.set()
 
     def call(self, fn: Callable[[], None]) -> None:
         """Run fn on the service thread."""
@@ -199,8 +211,7 @@ class Registration:
         @_RegisterReply
         def reply(ref, flags, error, *_):
             if error != NO_ERROR:
-                log.warning("announcing failed: DNS-SD error %d", error)
-                self.service.failed.set()
+                self.service.report(error, "announcing")
 
         for index in interfaces:
             ref = _Ref()
@@ -209,8 +220,7 @@ class Registration:
                 socket.htons(port), len(txt), txt, reply, None,
             )
             if error != NO_ERROR:
-                log.warning("announcing on interface %d failed: DNS-SD error %d", index, error)
-                self.service.failed.set()
+                self.service.report(error, f"announcing on interface {index}")
                 continue
             self._fds.append(self.service.add(ref, reply))
 
@@ -243,15 +253,16 @@ class Browser:
     def _browse(self) -> None:
         @_BrowseReply
         def found(ref, flags, index, error, name, regtype, domain, context):
-            if error == NO_ERROR and flags & FLAG_ADD:
+            if error != NO_ERROR:
+                self.service.report(error, "browsing")
+            elif flags & FLAG_ADD:
                 self._resolve(index, name, regtype, domain)
 
         for index in self.interfaces:
             ref = _Ref()
             error = self.service.lib.DNSServiceBrowse(ctypes.byref(ref), 0, index, consts.SERVICE_TYPE.encode(), None, found, None)
             if error != NO_ERROR:
-                log.warning("browsing on interface %d failed: DNS-SD error %d", index, error)
-                self.service.failed.set()
+                self.service.report(error, f"browsing on interface {index}")
                 continue
             self._fds.append(self.service.add(ref, found))
 
@@ -261,7 +272,9 @@ class Browser:
         @_ResolveReply
         def resolved(ref, flags, index, error, fullname, host, port, txt_len, txt, context):
             self.service.finish(holder["fd"])
-            if error == NO_ERROR:
+            if error != NO_ERROR:
+                self.service.report(error, "resolving", fatal=False)
+            else:
                 self._address(index, host, parse_txt(ctypes.string_at(txt, txt_len)))
 
         ref = _Ref()
@@ -274,7 +287,9 @@ class Browser:
         @_AddrInfoReply
         def got(ref, flags, index, error, hostname, address, ttl, context):
             self.service.finish(holder["fd"])
-            if error == NO_ERROR and address:
+            if error != NO_ERROR:
+                self.service.report(error, "looking up an address", fatal=False)
+            elif address:
                 raw = ctypes.string_at(address, SOCKADDR_IN_ADDR.stop)[SOCKADDR_IN_ADDR]
                 self.on_found(socket.inet_ntoa(raw), txt)
 

@@ -1,6 +1,5 @@
 # PyInstaller spec for Cannonball.app; built by scripts/build-macos.sh.
 import os
-import plistlib
 import sys
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, "..", ".."))
@@ -15,14 +14,17 @@ a = Analysis(
     excludes=["tkinter", "unittest", "pydoc", "test"],
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=consts.APP_NAME, console=False, argv_emulation=False)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=consts.APP_NAME, console=False, argv_emulation=False,
+          icon=os.environ["ICON"])
 coll = COLLECT(exe, a.binaries, a.datas, name=consts.APP_NAME)
 app = BUNDLE(
     coll,
     name=f"{consts.APP_NAME}.app",
     bundle_identifier=consts.BUNDLE_ID,
+    icon=os.environ["ICON"],  # drawn by icon.py
     version=__version__,
     info_plist={
+        "CFBundleDevelopmentRegion": consts.DEVELOPMENT_REGION,
         "CFBundleName": consts.APP_NAME,
         "CFBundleDisplayName": consts.APP_NAME,
         "CFBundleShortVersionString": __version__,
@@ -35,21 +37,14 @@ app = BUNDLE(
     },
 )
 
-# The daemon, registered with SMAppService by the app (services.py).
-program = f"Contents/MacOS/{consts.APP_NAME}"
-agents = os.path.join(DISTPATH, f"{consts.APP_NAME}.app", "Contents", "Library", "LaunchAgents")
-os.makedirs(agents, exist_ok=True)
-with open(os.path.join(agents, consts.DAEMON_PLIST), "wb") as f:
-    plistlib.dump(
-        {
-            "Label": consts.DAEMON_LABEL,
-            "BundleProgram": program,
-            "ProgramArguments": [program, consts.DAEMON_ARG],
-            "AssociatedBundleIdentifiers": [consts.BUNDLE_ID],
-            "RunAtLoad": True,
-            "KeepAlive": True,
-            "ThrottleInterval": consts.DAEMON_THROTTLE_SECONDS,
-            "ProcessType": "Interactive",
-        },
-        f,
-    )
+# A standard localization: macOS's Local Network privacy reads the app's name
+# and usage description through it, and fails for a bundle without one.
+strings = {
+    "CFBundleName": consts.APP_NAME,
+    "CFBundleDisplayName": consts.APP_NAME,
+    "NSLocalNetworkUsageDescription": consts.LOCAL_NETWORK_USAGE,
+}
+lproj = os.path.join(DISTPATH, f"{consts.APP_NAME}.app", "Contents", "Resources", f"{consts.DEVELOPMENT_REGION}.lproj")
+os.makedirs(lproj, exist_ok=True)
+with open(os.path.join(lproj, "InfoPlist.strings"), "w", encoding="utf-8") as f:
+    f.writelines(f'"{key}" = "{value}";\n' for key, value in strings.items())

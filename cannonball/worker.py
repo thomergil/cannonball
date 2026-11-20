@@ -12,8 +12,10 @@ An image is acknowledged only after it is safely on disk, so any failure
 before that makes the camera offer it again next time.
 """
 
+import errno
 import logging
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +47,7 @@ class Session:
         self.beat = heartbeat
         self.notify = notify  # progress events for the status display
         self.c: Client | None = None
+        self.connect_error: int | None = None
         self.read_ready = False
 
     def op(self, code: int, *params: int) -> tuple[list[int], bytes]:
@@ -71,6 +74,7 @@ class Session:
                 c.connect()
             except (OSError, ProtocolError) as e:
                 log.debug("%s: connect: %s", self.host, e)
+                self.connect_error = getattr(e, "errno", None)
                 c.close()
                 time.sleep(self.cfg.timing.connect_retry)
                 continue
@@ -153,6 +157,10 @@ class Session:
     def run(self) -> int:
         if not self.connect():
             log.info("%s: no PTP/IP session within %.0fs", self.host, self.cfg.timing.connect_window)
+            if self.connect_error == errno.EHOSTUNREACH and sys.platform == "darwin":
+                # The camera answers pings, but macOS refuses our connections.
+                log.warning("%s", consts.LOCAL_NETWORK_HINT)
+                self.notify(event=Event.ERROR, message=consts.LOCAL_NETWORK_HINT)
             return NO_CAMERA
         c = self.c
         try:
@@ -169,7 +177,7 @@ class Session:
             if failed:
                 raise SessionError(f"setup failed ({', '.join(failed)})")
             self.beat()
-            self.notify(event=Event.CONNECTED, camera=c.camera_name)
+            self.notify(event=Event.CONNECTED)
 
             count = 0
             idle_since = time.time()

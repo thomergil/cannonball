@@ -17,10 +17,15 @@ def test_waiting_shows_last_session():
     assert detail == TEXT["last"].format(count=3, ago=TEXT["just_now"])
 
 
-def test_receiving_shows_progress():
-    title, detail = describe(State.RECEIVING, {"camera": "EOS90D", "received": 2, "file": "IMG_1.JPG"}, None)
-    assert title == TEXT[State.RECEIVING].format(camera="EOS90D")
-    assert detail == TEXT["received"].format(count=2) + TEXT["now"].format(file="IMG_1.JPG")
+def test_receiving_counts_the_photo_in_progress():
+    title, detail = describe(State.RECEIVING, {"received": 47, "file": "IMG_1.JPG"}, None)
+    assert (title, detail) == (TEXT[State.RECEIVING].format(n=48), "IMG_1.JPG")
+    title, detail = describe(State.RECEIVING, {"received": 0, "file": None}, None)
+    assert (title, detail) == (TEXT[State.RECEIVING].format(n=1), "")
+
+
+def test_connecting():
+    assert describe(State.CAMERA, {}, None) == (TEXT[State.CAMERA], "")
 
 
 def test_error_is_shown_until_the_next_session():
