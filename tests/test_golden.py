@@ -58,7 +58,7 @@ def record(config_module, worker_module, scenario: dict, tmp: Path, port: int = 
             path.write_bytes(img.data)
         for _ in range(sessions):
             try:
-                worker_module.Session(cfg, "127.0.0.1", lambda: None, lambda **e: None, False).run()
+                worker_module.Session(cfg, "127.0.0.1", lambda: None, lambda **e: None).run()
             except Exception:  # noqa: BLE001, S110 - the recording is what counts
                 pass
     files = {str(p.relative_to(cfg.download.destination)): p.read_bytes() for p in cfg.download.destination.rglob("*") if p.suffix != ".part" and p.is_file()}

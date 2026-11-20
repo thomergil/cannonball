@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from . import config, consts, discovery, worker
-from .status import State, Status, pause_flag
+from .status import State, Status
 
 log = logging.getLogger(consts.PACKAGE)
 
@@ -75,10 +75,9 @@ class Hosts:
 
 
 class Supervisor:
-    def __init__(self, cfg: config.Config, log_queue, dry_run: bool, once: bool):
+    def __init__(self, cfg: config.Config, log_queue, once: bool):
         self.cfg = cfg
         self.log_queue = log_queue
-        self.dry_run = dry_run
         self.once = once
         self.stop = threading.Event()
         self.hosts = Hosts(cfg)
@@ -93,8 +92,7 @@ class Supervisor:
         self.last_announce = 0.0
         self.discovery: discovery.Discovery | None = None
         self.events = self.ctx.Queue()  # progress events from workers
-        self.status = Status(cfg.state_dir, cfg.download.destination)
-        self.paused = False
+        self.status = Status(cfg.state_dir)
 
     def on_camera(self, host: str, txt: dict) -> None:
         if self.hosts.add(host):
@@ -112,7 +110,7 @@ class Supervisor:
         self.heartbeat.value = time.time()
         self.proc = self.ctx.Process(
             target=worker.main,
-            args=(self.cfg, host, self.heartbeat, self.log_queue, self.events, self.dry_run),
+            args=(self.cfg, host, self.heartbeat, self.log_queue, self.events),
             name=f"{consts.PACKAGE}-worker-{host}",
             daemon=True,
         )
@@ -159,23 +157,6 @@ class Supervisor:
             except Exception:  # queue.Empty, or a half-written event from a killed worker
                 return
 
-    def check_pause(self) -> bool:
-        """Follow the pause flag the menu bar app sets. True while paused."""
-        paused = pause_flag(self.cfg.state_dir).exists()
-        if paused and not self.paused:
-            log.info("paused: no longer announcing; the camera will ignore this computer")
-            if self.proc and self.proc.is_alive():
-                self.kill_worker()  # its current image stays on the camera's list
-            if self.discovery:
-                self.discovery.withdraw()
-            self.status.set(state=State.PAUSED, file=None)
-        elif self.paused and not paused:
-            log.info("resumed")
-            self.status.set(state=State.WAITING)
-            self.announce()
-        self.paused = paused
-        return paused
-
     def check_host(self, host: str, busy: bool) -> bool:
         """Follow one camera address; start a session when it is up. Returns busy."""
         was_up = self.up.get(host, False)
@@ -203,8 +184,6 @@ class Supervisor:
         if self.check_worker():
             return True
         self.drain_events()
-        if self.check_pause():
-            return False
         if self.discovery and not self.discovery.alive():
             log.warning("mDNS announcement or browsing failed; restarting it")
             self.announce()
@@ -276,18 +255,15 @@ def setup_logging(cfg: config.Config, verbose: bool):
 def main() -> None:
     ap = argparse.ArgumentParser(prog=consts.PACKAGE, description="Receive Canon EOS Wi-Fi auto-send transfers.")
     ap.add_argument("-c", "--config", type=Path, help=f"config file (default {config.DEFAULT_PATH})")
-    ap.add_argument("--host", action="append", default=[], help="camera address to watch (repeatable)")
     ap.add_argument("--once", action="store_true", help="exit after the first completed sync")
-    ap.add_argument("-n", "--dry-run", action="store_true", help="list what would be downloaded")
     ap.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     args = ap.parse_args()
 
     cfg = config.load(args.config)
-    cfg.hosts += args.host
     queue, listener = setup_logging(cfg, args.verbose)
     log.debug("config: %s", cfg)
 
-    sup = Supervisor(cfg, queue, args.dry_run, args.once)
+    sup = Supervisor(cfg, queue, args.once)
     signal.signal(signal.SIGTERM, lambda *_: sup.stop.set())
     try:
         sup.run()

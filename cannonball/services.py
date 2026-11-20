@@ -1,7 +1,9 @@
 """Background services of Cannonball.app, via SMAppService (macOS 13+).
 
-Only meaningful inside the app bundle; from a source checkout run the daemon
-yourself (`python -m cannonball`).
+The app registers itself as a login item and the daemon as a launch agent.
+Quitting the app unregisters the daemon, which stops it; opening the app (by
+hand or at login) registers it again. Only meaningful inside the app bundle;
+from a source checkout run the daemon yourself (`python -m cannonball`).
 """
 
 import logging
@@ -16,20 +18,26 @@ def in_bundle() -> bool:
     return getattr(sys, "frozen", False) and sys.platform == "darwin"
 
 
-def _services():
+def _daemon():
     from ServiceManagement import SMAppService
 
-    return [SMAppService.agentServiceWithPlistName_(consts.DAEMON_PLIST), SMAppService.mainAppService()]
+    return SMAppService.agentServiceWithPlistName_(consts.DAEMON_PLIST)
 
 
-def register() -> str | None:
-    """Make sure the daemon and the login item are enabled. Returns a problem, if any."""
+def _login_item():
+    from ServiceManagement import SMAppService
+
+    return SMAppService.mainAppService()
+
+
+def start() -> str | None:
+    """Run the daemon and open the app at login. Returns a problem to show, if any."""
     if not in_bundle():
         return None
     from ServiceManagement import SMAppServiceStatusEnabled, SMAppServiceStatusRequiresApproval
 
     problem = None
-    for svc in _services():
+    for svc in (_daemon(), _login_item()):
         if svc.status() == SMAppServiceStatusEnabled:
             continue
         ok, err = svc.registerAndReturnError_(None)
@@ -41,15 +49,7 @@ def register() -> str | None:
     return problem
 
 
-def unregister() -> None:
-    """Stop the daemon and remove both from login."""
-    if not in_bundle():
-        return
-    for svc in _services():
-        svc.unregisterAndReturnError_(None)
-
-
-def open_login_items() -> None:
-    from ServiceManagement import SMAppService
-
-    SMAppService.openSystemSettingsLoginItems()
+def stop() -> None:
+    """Stop the daemon. The login item stays, so Cannonball starts again at login."""
+    if in_bundle():
+        _daemon().unregisterAndReturnError_(None)

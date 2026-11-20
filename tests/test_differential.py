@@ -103,7 +103,7 @@ def session(tmp_path, client_class, cam_args, sessions=1, dedupe=False):
         try:
             for _ in range(sessions):
                 try:
-                    results.append(Session(cfg, "127.0.0.1", lambda: None, lambda **e: None, False).run())
+                    results.append(Session(cfg, "127.0.0.1", lambda: None, lambda **e: None).run())
                 except Exception as e:  # noqa: BLE001 - compared below
                     results.append(type(e).__name__)
         finally:

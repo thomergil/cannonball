@@ -40,10 +40,8 @@ ITU2_GUID_KEY = "ITU-initiatorGUID"
 STATE_GUID = "guid"
 STATE_HOSTS = "hosts.json"
 STATE_STATUS = "status.json"
-STATE_PAUSED = "paused"
 
 # Status shown by the menu bar.
-RECENT_FILES = 10
 MENU_REFRESH_SECONDS = 1.0
 
 # DNS-SD lookups (macOS): give up on a camera record that does not resolve.

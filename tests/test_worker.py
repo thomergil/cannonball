@@ -17,9 +17,9 @@ from cannonball import canon, worker
 from cannonball.worker import Session
 
 
-def run(cfg, *, dry_run=False):
+def run(cfg):
     events = []
-    code = Session(cfg, "127.0.0.1", lambda: None, lambda **e: events.append(e), dry_run).run()
+    code = Session(cfg, "127.0.0.1", lambda: None, lambda **e: events.append(e)).run()
     return code, events
 
 
@@ -204,14 +204,6 @@ def test_stale_part_file_is_replaced(cfg_for):
     assert path.read_bytes() == imgs[0].data
     assert not path.with_name(path.name + ".part").exists()
 
-
-def test_dry_run_downloads_and_acknowledges_nothing(cfg_for):
-    imgs = images(5000)
-    with FakeCamera(GUID, imgs) as cam:
-        cfg = cfg_for(cam.port)
-        run(cfg, dry_run=True)
-    assert cam.acked == []
-    assert saved(cfg) == []
 
 
 def test_wrong_guid_is_no_camera(cfg_for):

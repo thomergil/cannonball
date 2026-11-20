@@ -8,10 +8,11 @@ Tested with an EOS 90D. Other EOS models with auto-send may work; reports welcom
 
 ## Install
 
-**macOS 13 or later:** download the `.dmg` from
+**macOS 13 or later, Apple Silicon:** download the `.dmg` from
 [Releases](https://github.com/thomergil/cannonball/releases), drag Cannonball to
 Applications and open it. A camera icon appears in the menu bar and Cannonball
-starts at login. Allow local network access when macOS asks.
+starts at login (turn that off in System Settings > General > Login Items).
+Allow local network access when macOS asks.
 
 **Linux:**
 
@@ -51,16 +52,15 @@ subfolder = "{date:%Y_%m_%d}"  # by capture date; "" for none
 ```
 
 All settings and defaults: [`cannonball/defaults.toml`](cannonball/defaults.toml). Restart Cannonball
-after editing (macOS: menu > Stop Cannonball, then open it again; Linux:
+after editing (macOS: menu > Quit Cannonball, then open it again; Linux:
 `systemctl --user restart cannonball`).
 
 Logs: `~/Library/Logs/cannonball.log` (macOS), `~/.local/state/cannonball/cannonball.log` (Linux).
 
 ## Notes
 
-- Cannonball only works on the networks in `networks`. On macOS it announces
-  and searches through the system's Bonjour service and opens no listening
-  sockets.
+- Cannonball only works on the networks in `networks` and opens no listening
+  sockets on macOS.
 - An image is confirmed to the camera only after it is saved. If a transfer
   is interrupted, the camera sends the image again, from the start, next time.
 - If the camera's Wi-Fi indicator says OFF, switch the camera off and on.

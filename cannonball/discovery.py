@@ -64,10 +64,6 @@ class Discovery(ABC):
         """(Re)publish this computer's record; the camera reacts to announcements."""
 
     @abstractmethod
-    def withdraw(self) -> None:
-        """Stop announcing."""
-
-    @abstractmethod
     def alive(self) -> bool:
         """False when announcing or browsing has failed and needs a restart."""
 
@@ -99,10 +95,6 @@ class MacDiscovery(Discovery):
             self.start()
         self.registration.stop()
         self.registration.start()
-
-    def withdraw(self) -> None:
-        if self.registration:
-            self.registration.stop()
 
     def alive(self) -> bool:
         return self.service is not None and not self.service.failed.is_set()
@@ -156,12 +148,12 @@ class AvahiDiscovery(Discovery):
         return fields[7], txt
 
     def announce(self) -> None:
-        self.withdraw()
+        self._withdraw()
         args = [self.PUBLISH, self.cfg.name, consts.SERVICE_TYPE, str(self.cfg.announce_port)]
         self.publisher = subprocess.Popen(args + [f"{k}={v}" for k, v in self.txt.items()],
                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def withdraw(self) -> None:
+    def _withdraw(self) -> None:
         _stop(self.publisher)
         self.publisher = None
 
@@ -169,7 +161,7 @@ class AvahiDiscovery(Discovery):
         return all(p is None or p.poll() is None for p in (self.publisher, self.browser))
 
     def close(self) -> None:
-        self.withdraw()
+        self._withdraw()
         _stop(self.browser)
 
 
@@ -208,7 +200,7 @@ class ZeroconfDiscovery(Discovery):
             self.start()
             if self.zc is None:
                 return
-        self.withdraw()
+        self._withdraw()
         self.info = ServiceInfo(
             f"{consts.SERVICE_TYPE}.{consts.SERVICE_DOMAIN}",
             f"{self.cfg.name}.{consts.SERVICE_TYPE}.{consts.SERVICE_DOMAIN}",
@@ -219,7 +211,7 @@ class ZeroconfDiscovery(Discovery):
         )
         self.zc.register_service(self.info, allow_name_change=True)
 
-    def withdraw(self) -> None:
+    def _withdraw(self) -> None:
         if self.info and self.zc:
             self.zc.unregister_service(self.info)
         self.info = None
@@ -228,7 +220,7 @@ class ZeroconfDiscovery(Discovery):
         return True
 
     def close(self) -> None:
-        self.withdraw()
+        self._withdraw()
         if self.zc:
             self.zc.close()
         self.zc = None

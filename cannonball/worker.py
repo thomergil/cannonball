@@ -39,12 +39,11 @@ class SessionError(Exception):
 class Session:
     client_class = Client  # tests substitute a reference implementation
 
-    def __init__(self, cfg: Config, host: str, heartbeat, notify, dry_run: bool):
+    def __init__(self, cfg: Config, host: str, heartbeat, notify):
         self.cfg = cfg
         self.host = host
         self.beat = heartbeat
         self.notify = notify  # progress events for the status display
-        self.dry_run = dry_run
         self.c: Client | None = None
         self.read_ready = False
 
@@ -106,9 +105,6 @@ class Session:
         when = (info and canon.capture_time(info.time1)) or datetime.now()
         dest, have = self.destination(name, when, size)
 
-        if self.dry_run:
-            log.info("would download %s (%.1f MB) -> %s", name, size / 1e6, dest)
-            return
         if not have:
             self.notify(event=Event.RECEIVING, file=name)
             self.download(handle, size, dest)
@@ -200,7 +196,7 @@ class Session:
             c.close()
 
 
-def main(cfg: Config, host: str, heartbeat, log_queue, events, dry_run: bool) -> None:
+def main(cfg: Config, host: str, heartbeat, log_queue, events) -> None:
     """Child-process entry point (multiprocessing, spawn)."""
     import logging.handlers
     import sys
@@ -216,7 +212,7 @@ def main(cfg: Config, host: str, heartbeat, log_queue, events, dry_run: bool) ->
         events.put(event)
 
     try:
-        code = Session(cfg, host, beat, notify, dry_run).run()
+        code = Session(cfg, host, beat, notify).run()
     except Exception as e:  # noqa: BLE001 - report every failure to the supervisor and retry
         log.warning("%s: session failed: %s", host, e, exc_info=log.isEnabledFor(logging.DEBUG))
         notify(event=Event.ERROR, message=f"session failed: {e}")
