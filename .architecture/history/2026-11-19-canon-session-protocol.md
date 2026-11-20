@@ -23,3 +23,8 @@ Facts verified on a real EOS 90D (firmware 1.1.1). Protocol source: epsimatic/ca
 - Camera offers one image at a time, next only after 0x9177; no queue size seen. 0xC1B1 RequestAutoSendImages undecoded. Worker logs non-property records at DEBUG to look for it. Blocks "Transferring X/Y" (Intent).
 
 **Touches:** part worker, part canon, part ptpip, interface worker→ptpip, interface worker→canon, interface supervisor→worker, rule ack-after-durable-save, rule restart-image-from-zero, rule worker-isolation, rule no-camera-port-probes, rule wire-matches-golden, `cannonball/worker.py`, `cannonball/canon.py`, `tests/fakecam.py`
+
+## First read after power-on — 2026-11-20
+- The 90D may send nothing for ~50 s (observed 0.5–49.6 s) on the first `0x9174` after it switches on; later reads, and new images in the same session, start in < 1 s. Giving up (10 s `op_timeout`, or the old 60 s supervisor stall) drops the session and the camera turns Wi-Fi off: owner saw "always fails the first time, works the second". Fix: reads use `timing.read_timeout` (120 s; epsimatic PROTOCOL.md §7.4 says ≥ 120 s); `stall_timeout` 180 s must exceed it.
+- The camera may miss pings meanwhile; the supervisor only logs "left the network" and does not stop the session.
+- Dead end: polling GetEvent until it answers fast before the first read. Slow GetEvent replies (1.7–3.4 s) did accompany some long first reads, but a fast one (43 ms) still preceded a 49.6 s read; it also breaks the golden byte match with ITU2.

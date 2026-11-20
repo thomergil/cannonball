@@ -125,7 +125,7 @@ def test_camera_stops_answering(cfg_for, op):
     imgs = images(2 * CHUNK)
     nth = 2 if op == canon.GET_EVENT else 1  # the first GetEvent is part of setup
     with FakeCamera(GUID, imgs, hang_on=(op, nth)) as cam:
-        cfg = cfg_for(cam.port, **{"timing.op_timeout": 0.5})
+        cfg = cfg_for(cam.port, **{"timing.op_timeout": 0.5, "timing.read_timeout": 0.5})
         started = time.monotonic()
         with pytest.raises(OSError):  # socket timeout
             run(cfg)
@@ -137,6 +137,16 @@ def test_camera_stops_answering(cfg_for, op):
         assert acked_first == []
     assert cam.acked == [imgs[0].handle]
     assert expected_path(cfg, imgs[0]).read_bytes() == imgs[0].data
+
+
+def test_first_read_may_outlast_op_timeout(cfg_for):
+    """The 90D prepares the first image of a session for over 10 s before sending a byte."""
+    imgs = images(2 * CHUNK, CHUNK)
+    with FakeCamera(GUID, imgs, first_read_wait=1.0) as cam:
+        cfg = cfg_for(cam.port, **{"timing.op_timeout": 0.5, "timing.read_timeout": 2})
+        code, _ = run(cfg)
+    assert code == worker.OK
+    assert cam.acked == [img.handle for img in imgs]
 
 
 @pytest.mark.parametrize("op", [canon.OBJECT_INFO, canon.READ, canon.TRANSFER_COMPLETE, canon.SAVE_COMPLETE, 0x9114, 0x913D])

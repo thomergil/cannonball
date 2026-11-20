@@ -97,8 +97,8 @@ class Session:
         self.connect_error: int | None = None
         self.read_ready = False
 
-    def op(self, code: int, *params: int) -> tuple[list[int], bytes]:
-        rc, ps, data = self.c.op(code, *params)
+    def op(self, code: int, *params: int, timeout: float | None = None) -> tuple[list[int], bytes]:
+        rc, ps, data = self.c.op(code, *params, timeout=timeout)
         if rc != RC_OK:
             raise SessionError(f"op 0x{code:04X}{list(params)} failed: 0x{rc:04X}")
         return ps, data
@@ -226,7 +226,7 @@ class Session:
         offset = 0
         while offset < size:
             want = min(self.cfg.download.chunk_size, size - offset)
-            _, data = self.op(canon.READ, handle, offset, want, 0, 0)
+            _, data = self.op(canon.READ, handle, offset, want, 0, 0, timeout=self.cfg.timing.read_timeout)
             self.c.op(canon.STATUS, canon.STORAGE)
             if not data:
                 raise SessionError(f"{name}: no data at offset {offset}")

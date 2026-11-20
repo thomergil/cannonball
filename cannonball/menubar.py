@@ -16,6 +16,9 @@ from AppKit import (
     NSApplication,
     NSApplicationActivationPolicyAccessory,
     NSColor,
+    NSCompositingOperationDestinationOut,
+    NSGradient,
+    NSGraphicsContext,
     NSImage,
     NSMenu,
     NSMenuItem,
@@ -24,28 +27,24 @@ from AppKit import (
     NSWorkspace,
     NSWorkspaceOpenConfiguration,
 )
-from Foundation import NSURL, NSBundle, NSMakeRect, NSMakeSize, NSObject, NSTimer
+from Foundation import NSURL, NSBundle, NSMakeRect, NSObject, NSRunLoop, NSRunLoopCommonModes, NSTimer
 from PyObjCTools import AppHelper
 
-from . import config, consts, drawing, localnet, services
+from . import config, consts, localnet, services
 from .__main__ import Supervisor, arguments, supervisor
 from .status import Snapshot, State
 
 log = logging.getLogger(__name__)
 
-# SF Symbols. While the camera is connected, the icon is the camera with a Wi-Fi
-# fan at its top right corner that fills up arc by arc, over and over.
+# SF Symbols. While the camera is connected, a soft band sweeps across the
+# camera without pause; the icon keeps its size.
 CAMERA_ICON = "camera"
 DOWN_ICON = "exclamationmark.triangle"
 CONNECTED = {State.CAMERA, State.RECEIVING}
-# Fan geometry, as shares of the camera symbol's height.
-CAMERA_SCALE = 0.62  # the camera, shrunk to leave room for the fan
-FAN_GAP = 0.04  # from the camera's corner to the fan's center
-FAN_RADII = (0.13, 0.235, 0.34)
-FAN_LINE = 0.075
-FAN_DOT = 0.05
-FAN_SPAN = (5, 85)  # degrees: the arcs face the top right
-FAN_FAINT = 0.25  # opacity of arcs not yet lit
+SHIMMER_STEP = 0.05  # seconds per frame
+SHIMMER_FRAMES = 24  # one sweep
+SHIMMER_WIDTH = 0.5  # of the band, as a share of the camera's width
+SHIMMER_DEPTH = 0.7  # how far the band's middle fades the camera
 
 TEXT = {
     State.WAITING: "Waiting for camera",
@@ -79,29 +78,35 @@ def symbol(name: str):
     return img
 
 
-def with_fan(camera, lit: int):
-    """The camera, made smaller, with a Wi-Fi fan of `lit` solid arcs at its top right.
+def shimmer(camera, position: float):
+    """The camera faded under a soft vertical band centered at `position`
+    (a share of its width), at the camera's own size.
 
     Vector drawing, so it is sharp at any screen resolution.
     """
-    h = camera.size().height
-    cw, ch = camera.size().width * CAMERA_SCALE, h * CAMERA_SCALE
-    center = (cw + h * FAN_GAP, ch + h * FAN_GAP)  # just off the camera's corner
-    radii = [r * h for r in FAN_RADII]
-    line = h * FAN_LINE
-    reach = radii[-1] + line / 2  # the outermost arc, stroke included
+    size = camera.size()
+    band = size.width * SHIMMER_WIDTH
+    clear, faded = NSColor.colorWithWhite_alpha_(0, 0), NSColor.colorWithWhite_alpha_(0, SHIMMER_DEPTH)
 
     def draw(rect) -> bool:
-        camera.drawInRect_(NSMakeRect(0, 0, cw, ch))
-        drawing.wifi_fan(center, radii, line, h * FAN_DOT, FAN_SPAN, NSColor.blackColor(),
-                         NSColor.colorWithWhite_alpha_(0, FAN_FAINT), lit)
+        camera.drawInRect_(rect)
+        NSGraphicsContext.currentContext().setCompositingOperation_(NSCompositingOperationDestinationOut)
+        gradient = NSGradient.alloc().initWithColors_([clear, faded, clear])
+        gradient.drawInRect_angle_(NSMakeRect(position * size.width - band / 2, 0, band, size.height), 0)
         return True
 
-    size = NSMakeSize(center[0] + reach, max(h, center[1] + reach))
     img = NSImage.imageWithSize_flipped_drawingHandler_(size, False, draw)
+    img.setAlignmentRect_(camera.alignmentRect())  # sits where the plain camera sits
     img.setTemplate_(True)
     img.setAccessibilityDescription_(consts.APP_NAME)
     return img
+
+
+def shimmer_frames(camera) -> list:
+    """One sweep of the band across the camera, left to right."""
+    edge = SHIMMER_WIDTH / 2  # band centers beyond this miss the camera
+    step = (1 + 2 * edge) / (SHIMMER_FRAMES + 1)
+    return [shimmer(camera, -edge + i * step) for i in range(1, SHIMMER_FRAMES + 1)]
 
 
 def ago(t: float) -> str:
@@ -143,8 +148,10 @@ class MenuBar(NSObject):
         self.thread.start()
         camera = symbol(CAMERA_ICON)
         self.idle, self.down = camera, symbol(DOWN_ICON)
-        self.frames = [with_fan(camera, lit) for lit in range(1, len(FAN_RADII) + 1)]
+        self.frames = shimmer_frames(camera)
+        self.still = shimmer(camera, 0.5)  # under Reduce Motion
         self.frame = 0
+        self.animation = None  # the shimmer's timer, while connected
         self.problem = services.open_at_login()
 
         self.item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
@@ -176,17 +183,35 @@ class MenuBar(NSObject):
     def refresh_(self, _timer) -> None:
         st = self.sup.status.snapshot
         state = st.state if self.thread.is_alive() else State.DOWN
-        if state in CONNECTED:
-            moving = not NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
-            self.frame = (self.frame + 1) % len(self.frames) if moving else len(self.frames) - 1
-            self.item.button().setImage_(self.frames[self.frame])
-        else:
+        connected = state in CONNECTED
+        self.animate(connected)
+        if not connected:
             self.item.button().setImage_(self.down if state == State.DOWN else self.idle)
         title, detail = describe(state, st, self.problem or (consts.LOCAL_NETWORK_HINT if self.blocked(st) else None))
         self.status_line.setTitle_(title)
         self.detail_line.setTitle_(detail)
         self.detail_line.setHidden_(not detail)
         self.check_local_network(state, st)
+
+    @objc.python_method
+    def animate(self, on: bool) -> None:
+        """Run the shimmer while on; show a still frame instead under Reduce Motion."""
+        still = on and NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+        if self.animation and (still or not on):
+            self.animation.invalidate()
+            self.animation = None
+        if still:
+            self.item.button().setImage_(self.still)
+        elif on and not self.animation:
+            self.frame = 0
+            self.animation = NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
+                SHIMMER_STEP, self, "nextFrame:", None, True
+            )
+            NSRunLoop.currentRunLoop().addTimer_forMode_(self.animation, NSRunLoopCommonModes)  # also while the menu is open
+
+    def nextFrame_(self, _timer) -> None:
+        self.item.button().setImage_(self.frames[self.frame])
+        self.frame = (self.frame + 1) % len(self.frames)
 
     @objc.python_method
     def blocked(self, st: Snapshot) -> bool:

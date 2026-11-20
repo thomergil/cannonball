@@ -76,7 +76,8 @@ def ref_client(ref):
             self.c.connect()
             self.c.cmd.settimeout(self.op_timeout)
 
-        def op(self, code, *params):
+        def op(self, code, *params, timeout=None):
+            self.c.cmd.settimeout(self.op_timeout if timeout is None else timeout)
             return self.c.op(code, params)
 
         def close(self):

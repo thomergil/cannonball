@@ -15,14 +15,14 @@ Owner priorities, in order: robustness with default settings and no user setup >
 - **discovery** (`cannonball/discovery.py`) — announce this computer's `_autosendimages._tcp` record, report paired cameras; backends Mac (mDNSResponder), Avahi CLI, python-zeroconf.
 - **dnssd** (`cannonball/dnssd.py`) — ctypes binding to mDNSResponder `dns_sd.h`; one thread owns all DNS-SD refs.
 - **status** (`cannonball/status.py`) — in-memory supervisor state for the menu bar; typed `Progress` (worker → supervisor) and frozen `Snapshot`.
-- **menubar** (`cannonball/menubar.py`, `app.py`, `localnet.py`, `services.py`, `drawing.py`) — macOS app: PyObjC status item, supervisor on a thread, Local Network permission prompt/alert, SMAppService login item; `drawing` (circle, stroke, Wi-Fi fan) is shared with `packaging/macos/icon.py`.
+- **menubar** (`cannonball/menubar.py`, `app.py`, `localnet.py`, `services.py`, `drawing.py`) — macOS app: PyObjC status item, supervisor on a thread, Local Network permission prompt/alert, SMAppService login item; `drawing` (circle, stroke, Wi-Fi fan) draws `packaging/macos/icon.py`; while connected the menu bar camera shimmers at its own size (a timer runs only then).
 - **packaging** (`packaging/`, `scripts/build-macos.sh`) — PyInstaller `.app` → signed/notarized `.dmg`; Linux systemd unit.
 - **tests** (`tests/`) — fake 90D (`fakecam.py`), golden wire recordings (`golden/`), differential test vs pinned GPL reference client.
 
 ## Interfaces
 
 ### supervisor → config · v2 · function
-`config.load(path: Path | None) -> Config`. Merges `defaults.toml` with user file; `defaults.toml` is the schema: user keys must exist there and match the default's type (int widens to float; bool is not int). Floats finite. Ranges: `config.RANGES`, timing ≥ 0 (`POSITIVE_TIMINGS` > 0). `Download.folder(when)` owns the folder rule (pattern formats to a relative path without `..`; symlinks allowed); `destination` absolute; `name` ≤ 63 bytes; `event_poll`, `connect_timeout` < `stall_timeout`; load checks it, worker uses it. Errors: `ConfigError(SystemExit)` one-line message `<path>: <problem>` (unknown key, bad type or range, TOML syntax, unreadable file; `supervisor()` adds an unusable `log_file`).
+`config.load(path: Path | None) -> Config`. Merges `defaults.toml` with user file; `defaults.toml` is the schema: user keys must exist there and match the default's type (int widens to float; bool is not int). Floats finite. Ranges: `config.RANGES`, timing ≥ 0 (`POSITIVE_TIMINGS` > 0). `Download.folder(when)` owns the folder rule (pattern formats to a relative path without `..`; symlinks allowed); `destination` absolute; `name` ≤ 63 bytes; `event_poll`, `connect_timeout`, `read_timeout` < `stall_timeout`; load checks it, worker uses it. Errors: `ConfigError(SystemExit)` one-line message `<path>: <problem>` (unknown key, bad type or range, TOML syntax, unreadable file; `supervisor()` adds an unusable `log_file`).
 `Config.networks: Networks`; `addr in networks` (IPv4 str); `networks.interfaces() -> {if_index: ipv4}`.
 GUID precedence: config `guid` > ITU2 plist `ITU-initiatorGUID` > `state_dir/guid` (generated once).
 App: `ConfigError` → line in `config.macos_log()` + one alert naming the problem, then quit (owner: a modal when Cannonball cannot work and the user can fix it).
@@ -35,8 +35,8 @@ App: `ConfigError` → line in `config.macos_log()` + one alert naming the probl
 - Logs: worker root logger → `QueueHandler(log_queue)`; supervisor `QueueListener` writes them.
 
 ### worker → ptpip · v2 · function
-`Client(host, guid: UUID, name, *, port, connect_timeout, op_timeout)`; `.connect()`; `.op(code, *params: int) -> (rc: int, params: list[int], data: bytes)`; `.close()`; `.camera_name`.
-- `op` never raises on non-OK `rc`; raises `ProtocolError` on a PTP/IP protocol failure (Init_Fail, short/bad framing, Cancel, tid mismatch, second Start_Data, data phase or Data payload > `MAX_DATA` (16 MiB; packet may add `DATA_HEADER`), control packet > `MAX_CONTROL`, > `MAX_PARAMS`) and `OSError` on transport failure (incl. `TimeoutError` after `op_timeout` without progress: only Start_Data and non-empty Data reset it).
+`Client(host, guid: UUID, name, *, port, connect_timeout, op_timeout)`; `.connect()`; `.op(code, *params: int, timeout: float | None = None) -> (rc: int, params: list[int], data: bytes)`; `.close()`; `.camera_name`.
+- `op` never raises on non-OK `rc`; raises `ProtocolError` on a PTP/IP protocol failure (Init_Fail, short/bad framing, Cancel, tid mismatch, second Start_Data, data phase or Data payload > `MAX_DATA` (16 MiB; packet may add `DATA_HEADER`), control packet > `MAX_CONTROL`, > `MAX_PARAMS`) and `OSError` on transport failure (incl. `TimeoutError` after `timeout` (default `op_timeout`) without progress: only Start_Data and non-empty Data reset it). Image reads use `timing.read_timeout`: the 90D sends nothing for over 10 s on a session's first read, and a session that gives up loses the camera's Wi-Fi.
 - Event connection: kept open, Probe_Request answered on both connections, Data packets limited to `MAX_CONTROL`; events unused (Canon reports via GetEvent). `camera_name` passes `printable()`.
 - Client override: `worker.Session.client_class` (tests set it to the reference client).
 

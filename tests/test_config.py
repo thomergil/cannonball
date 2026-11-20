@@ -93,9 +93,10 @@ def test_unknown_setting_is_an_error(tmp_path, raw):
         {"download": {"subfolder": "{date:%Y}/../.."}},
         {"download": {"destination": "Pictures"}},
         {"name": "x" * 64},
-        {"timing": {"connect_timeout": 60.0}},  # not less than stall_timeout
-        {"timing": {"event_poll": 60.0}},
-        *({"timing": {key: 0}} for key in ["poll_interval", "event_poll", "connect_window", "connect_timeout", "connect_retry", "op_timeout", "stall_timeout"]),
+        {"timing": {"connect_timeout": 180.0}},  # not less than stall_timeout
+        {"timing": {"read_timeout": 180.0}},  # a read reports progress only when it ends
+        {"timing": {"event_poll": 180.0}},
+        *({"timing": {key: 0}} for key in ["poll_interval", "event_poll", "connect_window", "connect_timeout", "connect_retry", "op_timeout", "read_timeout", "stall_timeout"]),
     ],
 )
 def test_bad_value_is_an_error(tmp_path, raw):

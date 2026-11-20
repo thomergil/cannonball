@@ -62,6 +62,7 @@ class Timing:
     connect_timeout: float
     connect_retry: float
     op_timeout: float
+    read_timeout: float
     event_poll: float
     idle_timeout: float
     stall_timeout: float
@@ -162,10 +163,10 @@ def _checked(default, value, name: str):
 
 # Every timing.* value must be at least 0, and these more than 0 (at 0,
 # Cannonball would spin or every operation would fail at once).
-POSITIVE_TIMINGS = ("poll_interval", "event_poll", "connect_window", "connect_timeout", "connect_retry", "op_timeout", "stall_timeout")
+POSITIVE_TIMINGS = ("poll_interval", "event_poll", "connect_window", "connect_timeout", "connect_retry", "op_timeout", "read_timeout", "stall_timeout")
 # The worker reports progress at least this often, so each must be shorter than
 # stall_timeout or the supervisor kills a healthy session.
-SHORTER_THAN_STALL = ("event_poll", "connect_timeout")
+SHORTER_THAN_STALL = ("event_poll", "connect_timeout", "read_timeout")
 MIN_CHUNK_MB = 1 / 64
 MAX_NAME_BYTES = 63  # a DNS-SD instance name label (RFC 6763)
 

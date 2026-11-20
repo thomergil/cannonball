@@ -41,7 +41,7 @@ STATE_HOSTS = "hosts.json"
 STATE_PARTIAL = "partial"  # path of the temp file being written, so the next session can remove it if this one is killed
 
 # Status shown by the menu bar.
-MENU_REFRESH_SECONDS = 0.4  # also one step of the Wi-Fi fan animation
+MENU_REFRESH_SECONDS = 0.4
 
 # Discovery: give up on a camera record that does not resolve (seconds).
 RESOLVE_TIMEOUT = 5.0

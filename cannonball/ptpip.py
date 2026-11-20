@@ -96,8 +96,8 @@ class Client:
 
     op() returns (response code, response params, data) and does not raise on
     a non-OK response code; it raises ProtocolError when the camera breaks the
-    protocol, TimeoutError when an operation goes op_timeout seconds without
-    progress, and OSError when the connection fails.
+    protocol, TimeoutError when an operation goes its timeout without progress,
+    and OSError when the connection fails.
     """
 
     def __init__(self, host: str, guid: uuid.UUID, name: str, *, port: int, connect_timeout: float, op_timeout: float):
@@ -167,24 +167,30 @@ class Client:
 
     # -- operations ------------------------------------------------------
 
-    def op(self, code: int, *params: int) -> tuple[int, list[int], bytes]:
+    def op(self, code: int, *params: int, timeout: float | None = None) -> tuple[int, list[int], bytes]:
+        """timeout: how long the operation may go without progress; op_timeout if None."""
+        timeout = self.op_timeout if timeout is None else timeout
         self._tid += 1
         tid = self._tid
         body = struct.pack("<IHI", DATA_PHASE_NONE_OR_IN, code, tid) + struct.pack(f"<{len(params)}I", *params)
         if log.isEnabledFor(logging.DEBUG):
             log.debug("-> 0x%04X %s", code, [hex(p) for p in params])
-        self.cmd.settimeout(self.op_timeout)
+        self.cmd.settimeout(timeout)
         self.cmd.sendall(packet(OPERATION_REQUEST, body))
 
         data = bytearray()
         expected = None  # data length announced by Start_Data
-        deadline = time.monotonic() + self.op_timeout  # moves only when this operation progresses
+        deadline = time.monotonic() + timeout  # moves only when this operation progresses
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"no progress on operation 0x{code:04X} for {self.op_timeout:g}s")
-            self.cmd.settimeout(remaining)
-            kind, body = recv_packet(self.cmd)
+            try:
+                if remaining <= 0:
+                    raise TimeoutError
+                self.cmd.settimeout(remaining)
+                kind, body = recv_packet(self.cmd)
+            except TimeoutError:
+                got = "no data phase" if expected is None else f"{len(data)} of {expected} bytes"
+                raise TimeoutError(f"no progress on operation 0x{code:04X} for {timeout:g}s ({got})") from None
             if kind == OPERATION_RESPONSE:
                 rc, rtid = unpack("<HI", body)
                 if rtid != tid:
@@ -202,7 +208,7 @@ class Client:
                 dtid, expected = unpack("<IQ", body)
                 if dtid != tid or expected > MAX_DATA:
                     raise ProtocolError(f"bad Start_Data (transaction {dtid}, {expected} bytes)")
-                deadline = time.monotonic() + self.op_timeout
+                deadline = time.monotonic() + timeout
             elif kind in DATA_CARRIERS:
                 (dtid,) = unpack("<I", body)
                 if expected is None or dtid != tid:
@@ -212,7 +218,7 @@ class Client:
                     raise ProtocolError(f"camera sent {len(data) + payload} bytes, announced {expected}")
                 if payload:
                     data += body[DATA_HEADER:]
-                    deadline = time.monotonic() + self.op_timeout
+                    deadline = time.monotonic() + timeout
             elif kind == CANCEL:
                 raise ProtocolError(f"camera cancelled operation 0x{code:04X}")
             elif kind == PROBE_REQUEST:

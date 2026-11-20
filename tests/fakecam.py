@@ -18,6 +18,7 @@ import random
 import socket
 import struct
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -85,6 +86,7 @@ class FakeCamera:
         fail_on: dict[int, int] | None = None,  # opcode -> response code
         raw_on: dict[int, bytes] | None = None,  # opcode -> bytes sent instead of a response
         short_reads: bool = False,  # answer reads with half the bytes asked for
+        first_read_wait: float = 0.0,  # seconds before answering a session's first read, as the 90D after shooting
         seed: int = 0,
     ):
         self.paired = paired
@@ -103,6 +105,7 @@ class FakeCamera:
         self.fail_on = fail_on or {}
         self.raw_on = raw_on or {}
         self.short_reads = short_reads
+        self.first_read_wait = first_read_wait
         self.rng = random.Random(seed)
 
         self.cmd_stream = bytearray()  # everything the client sent, per channel
@@ -321,6 +324,8 @@ class FakeCamera:
                 return self._respond(conn, tid, INVALID_HANDLE)
             if offset != session["stream"].get(handle, 0):
                 raise Hang  # the 90D cannot seek: it never answers
+            if not session["stream"]:
+                time.sleep(self.first_read_wait)
             if self.short_reads:
                 length = max(1, length // 2)
             chunk = img.data[offset : offset + length]

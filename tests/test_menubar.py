@@ -38,27 +38,25 @@ def test_down_shows_the_service_problem():
     assert describe(State.DOWN, Snapshot(), None) == (TEXT[State.DOWN], "")
 
 
-def test_fan_frames_render_and_fit(monkeypatch):
-    from cannonball import drawing, menubar
-    from cannonball.menubar import CAMERA_ICON, FAN_RADII, symbol, with_fan
+def opacity(image) -> float:
+    """Total alpha of the rendered image."""
+    from AppKit import NSBitmapImageRep
 
-    drawn = []
-    real = drawing.wifi_fan
+    rep = NSBitmapImageRep.imageRepWithData_(image.TIFFRepresentation())
+    return sum(rep.colorAtX_y_(x, y).alphaComponent() for x in range(rep.pixelsWide()) for y in range(rep.pixelsHigh()))
 
-    def recording(center, radii, line, *args):
-        drawn.append((center, radii, line))
-        real(center, radii, line, *args)
 
-    monkeypatch.setattr(menubar.drawing, "wifi_fan", recording)
+def test_shimmer_keeps_the_size_and_sweeps():
+    from cannonball.menubar import CAMERA_ICON, SHIMMER_FRAMES, shimmer, shimmer_frames, symbol
+
     camera = symbol(CAMERA_ICON)
-    frames = [with_fan(camera, lit) for lit in range(1, len(FAN_RADII) + 1)]
-    pictures = []
-    for frame in frames:
-        drawn.clear()
-        pictures.append(frame.TIFFRepresentation())  # runs the drawing code
-        assert drawn
-        for (x, y), radii, line in drawn:
-            reach = max(radii) + line / 2
-            assert x + reach <= frame.size().width and y + reach <= frame.size().height  # no arc is clipped
-    assert all(f.isTemplate() for f in frames) and all(pictures)
-    assert len(set(bytes(p) for p in pictures)) == len(frames)  # each frame lights one more arc
+    frames = shimmer_frames(camera)
+    sweep = frames
+    assert all(f.size() == camera.size() and f.isTemplate() for f in frames)
+    assert len(frames) == SHIMMER_FRAMES  # no pause between sweeps
+    full = opacity(camera)
+    middle = opacity(shimmer(camera, 0.5))
+    assert middle < 0.9 * full  # the band fades the camera
+    assert opacity(sweep[0]) > middle and opacity(sweep[-1]) > middle  # it enters and leaves at the edges
+    over = [f for i, f in enumerate(sweep) if 0.2 < (i + 1) / (SHIMMER_FRAMES + 1) < 0.8]  # band center over the camera
+    assert len({bytes(f.TIFFRepresentation()) for f in over}) == len(over)  # the band moves every frame

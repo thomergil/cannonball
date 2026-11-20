@@ -39,9 +39,10 @@ def test_daemon_receives_everything(cfg_for):
 
 def test_hung_worker_is_killed_and_retried(cfg_for):
     imgs = images(200_000)
-    with FakeCamera(GUID, imgs, hang_on=(canon.READ, 1)) as cam:
+    # The image's own info: the first two are part of setup.
+    with FakeCamera(GUID, imgs, hang_on=(canon.OBJECT_INFO, 3)) as cam:
         # The worker itself would wait 30 s; the supervisor must not.
-        cfg = cfg_for(cam.port, hosts=["127.0.0.1"], **{"timing.op_timeout": 30, "timing.stall_timeout": 1.5, "timing.connect_timeout": 1})
+        cfg = cfg_for(cam.port, hosts=["127.0.0.1"], **{"timing.op_timeout": 30, "timing.read_timeout": 1, "timing.stall_timeout": 1.5, "timing.connect_timeout": 1})
         started = time.monotonic()
         sup, thread, listener = start(cfg)
         assert stop(sup, thread, listener)
