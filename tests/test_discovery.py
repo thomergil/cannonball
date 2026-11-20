@@ -1,3 +1,4 @@
+import os
 import sys
 import threading
 import uuid
@@ -47,6 +48,7 @@ def test_avahi_parsable_output():
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="mDNSResponder")
+@pytest.mark.skipif(bool(os.environ.get("CI")), reason="needs mDNS on a private network; CI runners do not reliably have it")
 def test_mac_round_trip(tmp_path):
     """Publish a camera-like record through mDNSResponder and find it again."""
     from cannonball import dnssd
