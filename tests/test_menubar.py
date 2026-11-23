@@ -56,6 +56,85 @@ def test_show_runs_the_timer_only_for_the_shimmer_and_sets_each_icon_once():
     assert images == ["idle", "f0", "still"]
 
 
+def test_about_shows_the_version_and_links_to_the_project():
+    from AppKit import (
+        NSAboutPanelOptionApplicationName,
+        NSAboutPanelOptionApplicationVersion,
+        NSAboutPanelOptionCredits,
+        NSAboutPanelOptionVersion,
+        NSLinkAttributeName,
+    )
+
+    from cannonball import __version__, consts
+    from cannonball.menubar import about_options
+
+    options = about_options()
+    assert options[NSAboutPanelOptionApplicationName] == consts.APP_NAME
+    assert options[NSAboutPanelOptionApplicationVersion] == __version__
+    assert options[NSAboutPanelOptionVersion] == ""  # no "(build)" after the version
+    credits = options[NSAboutPanelOptionCredits]
+    assert credits.string() == consts.HOMEPAGE
+    link, _ = credits.attribute_atIndex_effectiveRange_(NSLinkAttributeName, 0, None)
+    assert str(link.absoluteString()) == consts.HOMEPAGE
+
+
+def test_no_updater_outside_the_app(monkeypatch):
+    from cannonball import updates
+
+    monkeypatch.setattr(updates.objc, "loadBundle", lambda *a, **k: pytest.fail("loaded Sparkle outside the app"))
+    assert updates.updater() is None  # a checkout has no Sparkle; the menu leaves out Check for Updates
+
+
+def test_no_updater_when_the_app_lacks_sparkle(monkeypatch, tmp_path, caplog):
+    from cannonball import services, updates
+
+    monkeypatch.setattr(services, "in_bundle", lambda: True)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "MacOS" / "Cannonball"))
+    assert updates.updater() is None  # the menu is still built, without Check for Updates
+    assert "Sparkle.framework" in caplog.text
+
+
+def test_no_updater_when_sparkle_lacks_its_controller(monkeypatch, tmp_path, caplog):
+    import objc
+
+    from cannonball import services, updates
+
+    monkeypatch.setattr(services, "in_bundle", lambda: True)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "MacOS" / "Cannonball"))
+    monkeypatch.setattr(updates.objc, "loadBundle", lambda *a, **k: None)
+    monkeypatch.setattr(updates.objc, "lookUpClass", lambda name: (_ for _ in ()).throw(objc.nosuchclass_error(name)))
+    assert updates.updater() is None  # the app still starts
+    assert "Sparkle.framework" in caplog.text
+
+
+def test_updater_starts_sparkle_from_the_apps_frameworks(monkeypatch, tmp_path):
+    from cannonball import services, updates
+
+    contents = tmp_path / "Cannonball.app" / "Contents"
+    monkeypatch.setattr(services, "in_bundle", lambda: True)
+    monkeypatch.setattr(sys, "executable", str(contents / "MacOS" / "Cannonball"))
+    loaded, started = [], []
+    monkeypatch.setattr(updates.objc, "loadBundle", lambda name, scope, bundle_path: loaded.append(bundle_path))
+    controller = SimpleNamespace(alloc=lambda: SimpleNamespace(
+        initWithStartingUpdater_updaterDelegate_userDriverDelegate_=lambda *a: started.append(a) or "controller"))
+    monkeypatch.setattr(updates.objc, "lookUpClass", {"SPUStandardUpdaterController": controller}.__getitem__)
+    assert updates.updater() == "controller"
+    assert loaded == [str((contents / "Frameworks" / "Sparkle.framework").resolve())]  # beside MacOS, not in it
+    assert started == [(True, None, None)]  # checks on its own schedule from launch
+
+
+def test_about_brings_the_panel_forward_with_the_options(monkeypatch):
+    from cannonball import menubar
+
+    calls = []
+    app = SimpleNamespace(activateIgnoringOtherApps_=lambda flag: calls.append(("activate", flag)),
+                          orderFrontStandardAboutPanelWithOptions_=lambda options: calls.append(("panel", options)))
+    monkeypatch.setattr(menubar, "NSApplication", SimpleNamespace(sharedApplication=lambda: app))
+    monkeypatch.setattr(menubar, "about_options", lambda: {"marker": 1})
+    menubar.MenuBar.alloc().init().about_(None)
+    assert calls == [("activate", True), ("panel", {"marker": 1})]
+
+
 def test_waiting_shows_last_session():
     title, detail = describe(State.WAITING, Snapshot(last_session=LastSession(time.time(), 3)), None)
     assert title == TEXT[State.WAITING]

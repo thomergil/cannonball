@@ -12,7 +12,8 @@ with an EOS 90D.
 [Cannonball.dmg](https://github.com/thomergil/cannonball/releases/latest/download/Cannonball.dmg)
 ([SHA-256](https://github.com/thomergil/cannonball/releases/latest/download/Cannonball.dmg.sha256)), drag
 Cannonball to Applications, open it, and allow local network access. It lives
-in the menu bar and opens at login. Or with Homebrew:
+in the menu bar, opens at login, and checks for updates by itself; choose Check
+for Updates… in its menu to check right away. Or with Homebrew:
 
 ```sh
 brew tap thomergil/tap

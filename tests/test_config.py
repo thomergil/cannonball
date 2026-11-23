@@ -198,3 +198,10 @@ def test_unusable_log_file_is_a_config_error(tmp_path):
     load(tmp_path, {"log_file": str(tmp_path)})  # a folder
     with pytest.raises(config.ConfigError, match="log_file"):
         supervisor(arguments(["-c", str(path)]))
+
+
+def test_homepage_matches_the_package_metadata():
+    from cannonball import consts
+
+    pyproject = tomllib.loads((config.Path(__file__).parent.parent / "pyproject.toml").read_text())
+    assert pyproject["project"]["urls"]["Homepage"] == consts.HOMEPAGE  # About panel, update feed and PyPI agree

@@ -34,6 +34,12 @@ app = BUNDLE(
         "NSLocalNetworkUsageDescription": consts.LOCAL_NETWORK_USAGE,
         "NSBonjourServices": [consts.SERVICE_TYPE],
         "NSHumanReadableCopyright": consts.LICENSE_NAME,
+        # Sparkle (cannonball/updates.py); scripts/build-macos.sh adds the framework
+        "SUFeedURL": consts.UPDATE_FEED,
+        "SUPublicEDKey": consts.UPDATE_PUBLIC_KEY,
+        "SUEnableAutomaticChecks": True,  # check without Sparkle's second-launch permission prompt
+        "SURequireSignedFeed": True,  # the appcast itself must carry the update key's signature
+        "SUVerifyUpdateBeforeExtraction": True,  # check the download's signature before opening it
     },
 )
 

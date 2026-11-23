@@ -62,6 +62,15 @@ LOCAL_NETWORK_HINT = f"Allow {APP_NAME} in System Settings > Privacy & Security 
 LOGIN_ITEM_HINT = f"Allow {APP_NAME} in System Settings > General > Login Items"
 LOGIN_ITEM_FAILED = f"Could not open {APP_NAME} at login: {{reason}}"
 LICENSE_NAME = "MIT License"
+HOMEPAGE = "https://github.com/thomergil/cannonball"
+# Sparkle updates. The feed is the appcast.xml of the newest GitHub release; its
+# entries download from the release tagged v<version>. The update key's private
+# half is in the release signer's login Keychain under UPDATE_KEY_ACCOUNT
+# (created with Sparkle's generate_keys --account <UPDATE_KEY_ACCOUNT>).
+UPDATE_FEED = f"{HOMEPAGE}/releases/latest/download/appcast.xml"
+RELEASE_DOWNLOAD = HOMEPAGE + "/releases/download/v{version}/"
+UPDATE_PUBLIC_KEY = "ihsIfgTgFbeTwQL8C+gc/akxd4cIjfQaYrvviJEGI0k="
+UPDATE_KEY_ACCOUNT = PACKAGE
 # macOS 26 has no link to the Local Network page itself, only to Privacy & Security.
 LOCAL_NETWORK_SETTINGS = "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
 PROBE_PORT = 9  # discard (RFC 863): localnet connects a UDP socket to it and sends nothing

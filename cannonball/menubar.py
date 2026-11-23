@@ -11,16 +11,22 @@ from enum import StrEnum, auto
 
 import objc
 from AppKit import (
+    NSAboutPanelOptionApplicationName,
+    NSAboutPanelOptionApplicationVersion,
+    NSAboutPanelOptionCredits,
+    NSAboutPanelOptionVersion,
     NSAlert,
     NSAlertFirstButtonReturn,
     NSAlertStyleCritical,
     NSApplication,
     NSApplicationActivationPolicyAccessory,
+    NSAttributedString,
     NSColor,
     NSCompositingOperationDestinationOut,
     NSGradient,
     NSGraphicsContext,
     NSImage,
+    NSLinkAttributeName,
     NSMenu,
     NSMenuItem,
     NSSquareStatusItemLength,
@@ -31,7 +37,7 @@ from AppKit import (
 from Foundation import NSURL, NSBundle, NSMakeRect, NSObject, NSRunLoop, NSRunLoopCommonModes, NSTimer
 from PyObjCTools import AppHelper
 
-from . import config, consts, localnet, services
+from . import __version__, config, consts, localnet, services, updates
 from .__main__ import Supervisor, arguments, supervisor
 from .status import Snapshot, State
 
@@ -54,6 +60,8 @@ TEXT = {
     "last": "Last: {count} image(s), {ago}",
     "error": "Last error: {error}",
     "open_folder": "Open Pictures Folder",
+    "about": f"About {consts.APP_NAME}",
+    "updates": "Check for Updates…",
     "quit": f"Quit {consts.APP_NAME}",
     "just_now": "just now",
     "minutes": "{n} min ago",
@@ -150,6 +158,22 @@ def describe(state: State, st: Snapshot, problem: str | None) -> tuple[str, str]
     return title, TEXT["last"].format(count=last.count, ago=ago(last.time)) if last else ""
 
 
+def about_options() -> dict:
+    """The About panel's name, version and link to the project; macOS adds the app's icon.
+
+    Name and version are given, not read from Info.plist, so a run from a checkout shows them too.
+    """
+    homepage = NSAttributedString.alloc().initWithString_attributes_(
+        consts.HOMEPAGE, {NSLinkAttributeName: NSURL.URLWithString_(consts.HOMEPAGE)}
+    )
+    return {
+        NSAboutPanelOptionApplicationName: consts.APP_NAME,
+        NSAboutPanelOptionApplicationVersion: __version__,
+        NSAboutPanelOptionVersion: "",  # else macOS adds CFBundleVersion in parentheses
+        NSAboutPanelOptionCredits: homepage,
+    }
+
+
 class MenuBar(NSObject):
     def initWithSupervisor_listener_(self, sup: Supervisor, listener):
         self = objc.super(MenuBar, self).init()
@@ -179,6 +203,11 @@ class MenuBar(NSObject):
         self.detail_line = self.add(menu, "")
         menu.addItem_(NSMenuItem.separatorItem())
         self.add(menu, TEXT["open_folder"], "openFolder:")
+        menu.addItem_(NSMenuItem.separatorItem())
+        self.add(menu, TEXT["about"], "about:")
+        self.updater = updates.updater()
+        if self.updater is not None:
+            self.add(menu, TEXT["updates"], "checkForUpdates:").setTarget_(self.updater)
         self.add(menu, TEXT["quit"], "quit:")
         self.item.setMenu_(menu)
 
@@ -257,6 +286,11 @@ class MenuBar(NSObject):
         folder = self.sup.cfg.download.destination
         folder.mkdir(parents=True, exist_ok=True)
         NSWorkspace.sharedWorkspace().openURL_(NSURL.fileURLWithPath_(str(folder)))
+
+    def about_(self, _) -> None:
+        app = NSApplication.sharedApplication()
+        app.activateIgnoringOtherApps_(True)  # a menu bar app's panel opens behind the frontmost app otherwise
+        app.orderFrontStandardAboutPanelWithOptions_(about_options())
 
     @objc.python_method
     def stop(self) -> None:
