@@ -1,5 +1,6 @@
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,8 +8,52 @@ pytest.importorskip("AppKit")
 if sys.platform != "darwin":
     pytest.skip("macOS menu bar", allow_module_level=True)
 
-from cannonball.menubar import TEXT, describe  # noqa: E402
+from cannonball.menubar import TEXT, Icon, describe, icon  # noqa: E402
 from cannonball.status import LastSession, Snapshot, State  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "state, reduce_motion, expected",
+    [
+        (State.RECEIVING, False, Icon.SHIMMER),  # only an actual transfer animates
+        (State.RECEIVING, True, Icon.STILL),
+        (State.CAMERA, False, Icon.STILL),  # connecting, nothing arriving yet: hold still
+        (State.CAMERA, True, Icon.STILL),
+        (State.WAITING, False, Icon.IDLE),
+        (State.WAITING, True, Icon.IDLE),  # Reduce Motion replaces only the animation
+        (State.DOWN, False, Icon.DOWN),
+        (State.DOWN, True, Icon.DOWN),
+    ],
+)
+def test_icon_shimmers_only_while_receiving(state, reduce_motion, expected):
+    assert icon(state, reduce_motion) == expected
+
+
+def test_show_runs_the_timer_only_for_the_shimmer_and_sets_each_icon_once():
+    from cannonball.menubar import MenuBar
+
+    images = []
+    button = SimpleNamespace(setImage_=images.append)
+    bar = MenuBar.alloc().init()  # NSObject init: no supervisor, no real status item
+    bar.item = SimpleNamespace(button=lambda: button)
+    bar.images = {Icon.IDLE: "idle", Icon.STILL: "still", Icon.DOWN: "down"}
+    bar.frames, bar.frame, bar.animation, bar.shown = ["f0", "f1"], 0, None, None
+
+    bar.show(Icon.IDLE)
+    bar.show(Icon.IDLE)  # the refresh timer repeats the same icon
+    assert images == ["idle"] and bar.animation is None
+
+    bar.show(Icon.SHIMMER)
+    timer = bar.animation
+    assert timer is not None and timer.isValid()
+    timer.fire()  # reaches nextFrame_
+    assert images == ["idle", "f0"]
+    bar.show(Icon.SHIMMER)
+    assert bar.animation is timer  # not restarted
+
+    bar.show(Icon.STILL)
+    assert not timer.isValid() and bar.animation is None
+    assert images == ["idle", "f0", "still"]
 
 
 def test_waiting_shows_last_session():

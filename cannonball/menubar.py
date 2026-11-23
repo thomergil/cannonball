@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 from datetime import datetime
+from enum import StrEnum, auto
 
 import objc
 from AppKit import (
@@ -22,8 +23,8 @@ from AppKit import (
     NSImage,
     NSMenu,
     NSMenuItem,
+    NSSquareStatusItemLength,
     NSStatusBar,
-    NSVariableStatusItemLength,
     NSWorkspace,
     NSWorkspaceOpenConfiguration,
 )
@@ -36,15 +37,14 @@ from .status import Snapshot, State
 
 log = logging.getLogger(__name__)
 
-# SF Symbols. While the camera is connected, a soft band sweeps across the
-# camera without pause; the icon keeps its size.
+# SF Symbol names. The shimmer is a soft band sweeping across the camera without pause.
 CAMERA_ICON = "camera"
 DOWN_ICON = "exclamationmark.triangle"
-CONNECTED = {State.CAMERA, State.RECEIVING}
 SHIMMER_STEP = 0.05  # seconds per frame
 SHIMMER_FRAMES = 24  # one sweep
 SHIMMER_WIDTH = 0.5  # of the band, as a share of the camera's width
 SHIMMER_DEPTH = 0.7  # how far the band's middle fades the camera
+SHIMMER_STILL = 0.5  # where the band rests when it does not move, as a share of the camera's width
 
 TEXT = {
     State.WAITING: "Waiting for camera",
@@ -109,6 +109,22 @@ def shimmer_frames(camera) -> list:
     return [shimmer(camera, -edge + i * step) for i in range(1, SHIMMER_FRAMES + 1)]
 
 
+class Icon(StrEnum):
+    IDLE = auto()  # waiting for the camera
+    STILL = auto()  # camera on the network, connecting; also in place of SHIMMER under Reduce Motion
+    SHIMMER = auto()  # photos arriving
+    DOWN = auto()  # Cannonball not running
+
+
+def icon(state: State, reduce_motion: bool) -> Icon:
+    """The menu bar icon for a state: animated only while photos arrive and Reduce Motion is off."""
+    if state == State.RECEIVING:
+        return Icon.STILL if reduce_motion else Icon.SHIMMER
+    if state == State.CAMERA:
+        return Icon.STILL
+    return Icon.DOWN if state == State.DOWN else Icon.IDLE
+
+
 def ago(t: float) -> str:
     s = time.time() - t
     if s < MINUTE:
@@ -147,14 +163,16 @@ class MenuBar(NSObject):
         self.thread = threading.Thread(target=sup.run, name=consts.PACKAGE, daemon=True)
         self.thread.start()
         camera = symbol(CAMERA_ICON)
-        self.idle, self.down = camera, symbol(DOWN_ICON)
+        self.images = {Icon.IDLE: camera, Icon.STILL: shimmer(camera, SHIMMER_STILL), Icon.DOWN: symbol(DOWN_ICON)}
         self.frames = shimmer_frames(camera)
-        self.still = shimmer(camera, 0.5)  # under Reduce Motion
         self.frame = 0
-        self.animation = None  # the shimmer's timer, while connected
+        self.animation = None  # NSTimer that advances the shimmer frames; None unless the shimmer is shown
+        self.shown = None  # Icon now in the menu bar; None before the first show()
         self.problem = services.open_at_login()
 
-        self.item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
+        # Square, fixed width: each image change in a variable-length item makes the menu bar
+        # lay out again, which the shimmer would do 20 times a second.
+        self.item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSSquareStatusItemLength)
         menu = NSMenu.alloc().init()
         menu.setAutoenablesItems_(False)
         self.status_line = self.add(menu, "")
@@ -183,10 +201,7 @@ class MenuBar(NSObject):
     def refresh_(self, _timer) -> None:
         st = self.sup.status.snapshot
         state = st.state if self.thread.is_alive() else State.DOWN
-        connected = state in CONNECTED
-        self.animate(connected)
-        if not connected:
-            self.item.button().setImage_(self.down if state == State.DOWN else self.idle)
+        self.show(icon(state, NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()))
         title, detail = describe(state, st, self.problem or (consts.LOCAL_NETWORK_HINT if self.blocked(st) else None))
         self.status_line.setTitle_(title)
         self.detail_line.setTitle_(detail)
@@ -194,20 +209,25 @@ class MenuBar(NSObject):
         self.check_local_network(state, st)
 
     @objc.python_method
-    def animate(self, on: bool) -> None:
-        """Run the shimmer while on; show a still frame instead under Reduce Motion."""
-        still = on and NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion()
-        if self.animation and (still or not on):
+    def show(self, wanted: Icon) -> None:
+        """Put `wanted` in the menu bar unless it is already shown.
+
+        Starts the frame timer for Icon.SHIMMER and stops it for any other icon.
+        """
+        if wanted == self.shown:
+            return
+        if self.animation:
             self.animation.invalidate()
             self.animation = None
-        if still:
-            self.item.button().setImage_(self.still)
-        elif on and not self.animation:
+        if wanted == Icon.SHIMMER:
             self.frame = 0
             self.animation = NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
                 SHIMMER_STEP, self, "nextFrame:", None, True
             )
             NSRunLoop.currentRunLoop().addTimer_forMode_(self.animation, NSRunLoopCommonModes)  # also while the menu is open
+        else:
+            self.item.button().setImage_(self.images[wanted])
+        self.shown = wanted
 
     def nextFrame_(self, _timer) -> None:
         self.item.button().setImage_(self.frames[self.frame])

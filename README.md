@@ -1,4 +1,4 @@
-<img src="https://raw.githubusercontent.com/thomergil/cannonball/main/packaging/macos/icon.png" width="96" alt="">
+<p align="center"><img src="https://raw.githubusercontent.com/thomergil/cannonball/main/packaging/macos/icon.png" width="96" alt=""></p>
 
 # Cannonball
 
@@ -60,7 +60,8 @@ Restart Cannonball after a change (Linux: `systemctl --user restart cannonball`)
   fails, switch the camera off, wait a few seconds, switch it on, and wait 30
   seconds; the first photo can take that long to start.
 - While photos are coming in, the menu bar camera shimmers and the red camera
-  icon on the camera flickers.
+  icon on the camera flickers. While the camera is on the network but not sending
+  photos, the menu bar camera is partly faded and holds still.
 - The camera decides which photos to send (Image sending options).
 - Any device on `networks` can pose as the camera. Cannonball writes only plain
   files inside the download folder, and on macOS opens no listening sockets.

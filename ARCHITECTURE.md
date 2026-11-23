@@ -1,5 +1,5 @@
 <!-- AI-only. Terse facts. -->
-# Architecture Contract — v2
+# Architecture Contract — v3
 > Binding. Enforce holds code to Parts, Interfaces, Rules; changes bump version
 > and add a History entry under .architecture/history/. Intent is nonbinding.
 
@@ -15,7 +15,7 @@ Owner priorities, in order: robustness with default settings and no user setup >
 - **discovery** (`cannonball/discovery.py`) — announce this computer's `_autosendimages._tcp` record, report paired cameras; backends Mac (mDNSResponder), Avahi CLI, python-zeroconf.
 - **dnssd** (`cannonball/dnssd.py`) — ctypes binding to mDNSResponder `dns_sd.h`; one thread owns all DNS-SD refs.
 - **status** (`cannonball/status.py`) — in-memory supervisor state for the menu bar; typed `Progress` (worker → supervisor) and frozen `Snapshot`.
-- **menubar** (`cannonball/menubar.py`, `app.py`, `localnet.py`, `services.py`, `drawing.py`) — macOS app: PyObjC status item, supervisor on a thread, Local Network permission prompt/alert, SMAppService login item; `drawing` (circle, stroke, Wi-Fi fan) draws `packaging/macos/icon.py`; while connected the menu bar camera shimmers at its own size (a timer runs only then).
+- **menubar** (`cannonball/menubar.py`, `app.py`, `localnet.py`, `services.py`, `drawing.py`) — macOS app: PyObjC status item, supervisor on a thread, Local Network permission prompt/alert, SMAppService login item; `drawing` (circle, stroke, Wi-Fi fan) is also used by `packaging/macos/icon.py`; fixed-width status item; camera icon shimmers only while photos arrive (RECEIVING), holds a still frame while the camera connects (CAMERA); the frame timer runs only while the shimmer is shown.
 - **packaging** (`packaging/`, `scripts/build-macos.sh`) — PyInstaller `.app` → signed/notarized `.dmg`; Linux systemd unit.
 - **tests** (`tests/`) — fake 90D (`fakecam.py`), golden wire recordings (`golden/`), differential test vs pinned GPL reference client.
 
@@ -90,6 +90,7 @@ Files: `state_dir/{guid,hosts.json,local-network-alert-shown,partial}` (`hosts.j
 - **alert-once** *(error)* — Local Network alert shown at most once until a session reaches RECEIVING (flag `state_dir/local-network-alert-shown`, cleared only then), never within `LOCAL_NETWORK_GRACE` of launch; the only other modal is the config-error alert before quitting; both go through `menubar.alert`. _Check: `MenuBar.check_local_network`, `menubar.main`._ _History: 2026-11-20-macos-local-network._
 - **one-installed-copy** *(warn)* — build leaves no extra registered `.app` copies (lsregister -u, delete). _Check: tail of `scripts/build-macos.sh`._ _History: 2026-11-20-macos-local-network._
 - **status-single-writer** *(error)* — `Status` is written only by the supervisor thread (own state + worker events); menubar reads snapshots. _Check: grep `status.set`/`status.event`._ _History: 2026-11-20-simplicity-scope._
+- **quiet-menu-bar** *(error)* — status item length is `NSSquareStatusItemLength`; `MenuBar.show` sets the button image only when `menubar.icon(state, reduce_motion)` changes; the frame timer (only other image setter) runs only while `Icon.SHIMMER` is shown (RECEIVING, Reduce Motion off). _Check: `menubar.icon`, `MenuBar.show`; `tests/test_menubar.py`._ _History: 2026-11-23-menubar-icon._
 - **minimal-menu** *(error)* — menu = status line, optional detail line, Open Pictures Folder, Quit; icon has no count; no pause, recent files, or extra commands. _Check: `MenuBar.initWithSupervisor_listener_`._ _History: 2026-11-20-simplicity-scope._
 - **config-single-source** *(error)* — every tunable and its default lives only in `defaults.toml` (user file overrides existing keys only); fixed shared identifiers/strings in `consts.py`, protocol numbers in `canon.py`/`ptpip.py`, other literals as named module constants; no inline magic values. _Check: reader judgment; `tests/test_config.py`._ _History: 2026-11-20-simplicity-scope._
 - **pinned-wheels-only** *(error)* — every dependency pinned by SHA-256 in `requirements*.txt`, installed with `--require-hashes --only-binary :all:`; no sdist-only dependency; CI actions pinned by commit. _Check: `requirements*.txt`, `.github/workflows/test.yml`._ _History: 2026-11-20-dependencies-supply-chain._
