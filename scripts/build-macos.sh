@@ -43,7 +43,7 @@ tar -xJf "$SPARKLE_ARCHIVE" -C "$SPARKLE"
 PY=$(find "$B/python" -path "*/bin/python${PYTHON_VERSION%.*}" -type f | head -1)
 "$PY" -m venv "$B/venv"
 VPY=$B/venv/bin/python
-"$VPY" -m pip install -q --require-hashes --only-binary :all: -r requirements.txt -r requirements-dev.txt
+"$VPY" -m pip install -q --require-hashes --only-binary :all: -r requirements.txt -r requirements-dev.txt -r requirements-dmg.txt
 
 APP_NAME=$("$VPY" -c 'from cannonball import consts; print(consts.APP_NAME)')
 VERSION=$("$VPY" -c 'from cannonball import __version__; print(__version__)')
@@ -100,10 +100,10 @@ else
 fi
 codesign --verify --deep --strict "$APP"
 
-mkdir -p "$B/dmg"
-cp -R "$APP" "$B/dmg/"
-ln -s /Applications "$B/dmg/Applications"
-hdiutil create -quiet -volname "$APP_NAME" -srcfolder "$B/dmg" -format UDZO "$DMG"
+# The image opens on the app, an arrow and Applications (packaging/macos/dmg-settings.py)
+"$VPY" packaging/macos/dmg_background.py "$B/dmg-background"
+"$B/venv/bin/dmgbuild" -s packaging/macos/dmg-settings.py -D "settings_dir=$PWD/packaging/macos" \
+  -D "app=$APP" -D "background=$B/dmg-background/background.png" "$APP_NAME" "$DMG"
 
 if [ "$SIGNING_IDENTITY" != - ]; then
   codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
@@ -134,6 +134,6 @@ fi
 # Leave only the image: macOS mixes up apps with several copies installed
 # (TN3179, FB15568200), and LaunchServices registers these build copies.
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-"$LSREGISTER" -u "$APP" "$B/dmg/$APP_NAME.app" 2>/dev/null || true
-rm -rf "$B/dist" "$B/dmg"
+"$LSREGISTER" -u "$APP" 2>/dev/null || true
+rm -rf "$B/dist"
 echo "$DMG"
